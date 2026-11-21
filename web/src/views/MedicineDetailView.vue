@@ -33,6 +33,10 @@
             <div class="field"><label>低库存阈值</label><input v-model.number="infoForm.low_stock_threshold" type="number" min="0" class="input" /></div>
             <div class="field"><label>临期预警天数</label><input v-model.number="infoForm.expiry_warn_days" type="number" min="0" class="input" /></div>
           </div>
+          <div class="field" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+            <div><label style="margin:0">库存不足提醒</label><div class="tiny muted" style="margin-top:2px">关掉后这个药低于阈值或缺货都不再提醒补货；不再使用的药可以关掉</div></div>
+            <label class="switch"><input v-model="infoForm.low_stock_notify_enabled" type="checkbox" /><span /></label>
+          </div>
           <div class="field"><label>单价（元/单位）</label><input v-model.number="infoForm.unit_price" type="number" min="0" step="0.01" class="input" placeholder="可选，例如 3.50" /></div>
           <div class="field"><label>备注</label><textarea v-model="infoForm.notes" class="textarea" /></div>
           <p class="tiny muted editor-line">新增：{{ medicine.created_by_name || '—' }} · {{ formatDate(medicine.created_at || '') }}<template v-if="medicine.updated_by_name"> ｜ 最后更新：{{ medicine.updated_by_name }} · {{ formatDate(medicine.updated_at || '') }}</template></p>
@@ -55,7 +59,7 @@
         <div v-if="book.canMedicineCreate || book.canMedicineEdit" class="stock-btn-row" style="margin-top:10px">
           <button v-if="book.canMedicineCreate" class="btn btn-primary" @click="openStockIn"><AppIcon name="plus" :size="18" />入库</button>
           <button v-if="book.canMedicineCreate" class="btn btn-outline" @click="openStockOut"><AppIcon name="refresh" :size="18" />出库</button>
-          <button v-if="book.canMedicineEdit" class="btn btn-outline" @click="showStocktake = true"><AppIcon name="edit" :size="18" />盘点</button>
+          <button v-if="book.canMedicineEdit" class="btn btn-outline" @click="openStocktake"><AppIcon name="edit" :size="18" />盘点</button>
         </div>
         <div class="section">
           <div class="section-head"><h2>批次</h2><span class="tiny muted">{{ batches.length }} 个</span></div>
@@ -64,6 +68,7 @@
             <div v-for="b in batches" :key="b.id" class="card batch-card">
               <div class="batch-head"><b>{{ b.batch_no || '无批号' }}</b><span class="badge" :class="b.quantity_remaining <= 0 ? 'pending' : 'done'">{{ b.quantity_remaining }} / {{ b.quantity_initial }} {{ medicine.unit }}</span></div>
               <div class="tiny muted" style="margin-top:3px">有效期 {{ b.expiry_date || '未设置' }} · 入库 {{ formatDate(b.received_at) }}</div>
+              <button v-if="b.editable && book.canMedicineEdit" type="button" class="btn btn-ghost btn-xs" style="margin-top:6px" @click="openEditBatch(b.id)"><AppIcon name="edit" :size="14" />修改入库</button>
             </div>
           </div>
         </div>
@@ -74,7 +79,7 @@
         <div v-if="book.canMedicineCreate || book.canMedicineEdit" class="moves-actions">
           <button v-if="book.canMedicineCreate" class="btn btn-primary btn-sm" @click="openStockIn"><AppIcon name="plus" :size="16" />入库</button>
           <button v-if="book.canMedicineCreate" class="btn btn-outline btn-sm" @click="openStockOut"><AppIcon name="refresh" :size="16" />出库</button>
-          <button v-if="book.canMedicineEdit" class="btn btn-outline btn-sm" @click="showStocktake = true"><AppIcon name="edit" :size="16" />盘点</button>
+          <button v-if="book.canMedicineEdit" class="btn btn-outline btn-sm" @click="openStocktake"><AppIcon name="edit" :size="16" />盘点</button>
           <button class="btn btn-ghost btn-sm" @click="router.push('/stock?medicine_id=' + medicine.id)">去库存页<AppIcon name="chevron" :size="16" /></button>
         </div>
         <div class="chip-row" style="margin-bottom:10px">
@@ -87,7 +92,10 @@
               <div class="move-title"><span class="badge" :class="movementBadge(m.type)">{{ movementTypeLabel(m.type) }}</span><b v-if="m.entry_source || m.channel" class="tiny muted">{{ entrySourceLabel(m.entry_source) }}<template v-if="m.type === 'in'"> · {{ channelLabel(m.channel) }}</template></b></div>
               <div class="tiny muted" style="margin-top:2px">{{ formatDate(m.created_at) }}<template v-if="m.reason"> · {{ m.reason }}</template></div>
             </div>
-            <b class="move-delta" :style="{ color: m.quantity_delta >= 0 ? 'var(--mc-primary-strong)' : 'var(--mc-danger)' }">{{ m.quantity_delta > 0 ? '+' : '' }}{{ m.quantity_delta }}</b>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button v-if="canEditMove(m)" type="button" class="btn btn-ghost btn-xs" @click="openEditBatch(m.batch_id)"><AppIcon name="edit" :size="14" />修改</button>
+              <b class="move-delta" :style="{ color: m.quantity_delta >= 0 ? 'var(--mc-primary-strong)' : 'var(--mc-danger)' }">{{ m.quantity_delta > 0 ? '+' : '' }}{{ m.quantity_delta }}</b>
+            </div>
           </div>
         </div>
         <button v-if="hasMore" class="btn btn-outline btn-block" style="margin-top:10px" :disabled="loadingMoves" @click="loadMoves(false)">{{ loadingMoves ? '加载中…' : '加载更多' }}</button>
@@ -103,11 +111,7 @@
       <div v-if="showStockIn" class="sheet-backdrop" @click.self="showStockIn=false">
         <section class="sheet"><div class="sheet-grab" /><div class="sheet-head"><h2>药品入库</h2><button class="icon-btn" @click="showStockIn=false"><AppIcon name="close" /></button></div>
           <form class="sheet-body" @submit.prevent="stockIn">
-            <div class="field"><label>入库来源</label><SheetSelect v-model="stockInForm.channel" placeholder="选择来源" :options="channelOptions" /></div>
-            <div class="field-row"><div class="field"><label>包装数</label><input v-model.number="stockInForm.packages" type="number" min="0" step="0.01" class="input" /></div><div class="field"><label>每包装含量</label><input v-model.number="stockInForm.units_per_package" type="number" min="0" step="0.01" class="input" /></div></div>
-            <div class="field"><label>或直接填数量（{{ medicine?.unit }}）</label><input v-model.number="stockInForm.quantity" type="number" min="0" step="0.01" class="input" /></div>
-            <div class="field-row"><div class="field"><label>批号</label><input v-model="stockInForm.batch_no" class="input" /></div><div class="field"><label>有效期</label><DateField v-model="stockInForm.expiry_date" placeholder="选择日期" clearable /></div></div>
-            <div class="field"><label>备注</label><input v-model="stockInForm.note" class="input" /></div>
+            <StockInFields :model-value="stockInForm" :unit="medicine?.unit || ''" @update:model-value="(v) => Object.assign(stockInForm, v)" />
             <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showStockIn=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving">{{ saving ? '入库中…' : '确认入库' }}</button></div>
           </form>
         </section>
@@ -134,9 +138,7 @@
         <section class="sheet"><div class="sheet-grab" /><div class="sheet-head"><h2>药品出库</h2><button class="icon-btn" @click="showStockOut=false"><AppIcon name="close" /></button></div>
           <form class="sheet-body" @submit.prevent="stockOut">
             <p class="tiny muted" style="margin:-2px 0 10px">当前库存 {{ medicine?.stock_quantity }} {{ medicine?.unit }}；出库按先进先出扣批次，数量不能超过库存。</p>
-            <div class="field"><label>出库数量（{{ medicine?.unit }}）</label><input v-model.number="stockOutForm.quantity" type="number" min="0" step="0.01" class="input" placeholder="例如 1" /></div>
-            <div class="field"><label>用途</label><SheetSelect v-model="stockOutForm.channel" placeholder="选择用途" :options="channelOptions" /></div>
-            <div class="field"><label>原因</label><input v-model="stockOutForm.reason" class="input" placeholder="例如：过期丢弃 / 借出 / 带走" /></div>
+            <StockOutFields :model-value="stockOutForm" :unit="medicine?.unit || ''" @update:model-value="(v) => Object.assign(stockOutForm, v)" />
             <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showStockOut=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving">{{ saving ? '出库中…' : '确认出库' }}</button></div>
           </form>
         </section>
@@ -150,11 +152,11 @@
           <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showTransfer=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving || !transferTarget" @click="doTransfer">{{ saving ? '转移中…' : '确认转移' }}</button></div>
         </section>
       </div>
+      <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="medicine?.unit || ''" @close="showEditBatch=false" @saved="onBatchSaved" />
       <div v-if="showStocktake" class="sheet-backdrop" @click.self="showStocktake=false">
         <section class="sheet"><div class="sheet-grab" /><div class="sheet-head"><h2>盘点库存</h2><button class="icon-btn" @click="showStocktake=false"><AppIcon name="close" /></button></div>
           <form class="sheet-body" @submit.prevent="stocktake">
-            <div class="field"><label>盘点后总量（{{ medicine?.unit }}）</label><input v-model.number="targetStock" type="number" min="0" step="0.01" class="input" /></div>
-            <div class="field"><label>原因</label><input v-model="stocktakeReason" class="input" placeholder="例如：月末盘点" /></div>
+            <StocktakeFields :model-value="stocktakeForm" :unit="medicine?.unit || ''" @update:model-value="(v) => Object.assign(stocktakeForm, v)" />
             <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showStocktake=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving">确认盘点</button></div>
           </form>
         </section>
@@ -174,7 +176,11 @@ import { formOptions, packageSpecOptions, specOptions, unitOptions } from '../ut
 import DateField from '../components/DateField.vue'
 import SheetSelect from '../components/SheetSelect.vue'
 import { medicineApi, type Medicine } from '../api/medcare'
-import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel } from '../utils/stock'
+import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel, emptyStockInDraft, stockInQuantity, emptyStockOutDraft, emptyStocktakeDraft, type StockInDraft, type StockOutDraft, type StocktakeDraft } from '../utils/stock'
+import StockInFields from '../components/StockInFields.vue'
+import StockOutFields from '../components/StockOutFields.vue'
+import StocktakeFields from '../components/StocktakeFields.vue'
+import StockInEditSheet from '../components/StockInEditSheet.vue'
 import { useBookStore } from '../stores/book'
 import { useUIStore } from '../stores/ui'
 const route = useRoute()
@@ -197,11 +203,12 @@ const hasMore = ref(false)
 const showStockIn = ref(false)
 const showStockOut = ref(false)
 const showStocktake = ref(false)
+const showEditBatch = ref(false)
+const editBatch = ref<any>(null)
 const showTransfer = ref(false)
 const transferTarget = ref(0)
 const transferOptions = computed(() => book.books.filter((b) => b.id !== book.currentId && (b.role === 'owner' || b.role === 'manager')).map((b) => ({ value: b.id, label: b.name + '（' + b.care_recipient_name + '）' })))
-const targetStock = ref(0)
-const stocktakeReason = ref('')
+const stocktakeForm = reactive<StocktakeDraft>(emptyStocktakeDraft())
 const channelOptions = STOCK_CHANNEL_OPTIONS
 const categoryOptions = [
   { value: 'oral', label: '口服' }, { value: 'injection', label: '注射' },
@@ -211,9 +218,9 @@ const moveFilters = [
   { value: '', label: '全部' }, { value: 'in', label: '入库' }, { value: 'out', label: '用药扣减' },
   { value: 'adjust', label: '调整' }, { value: 'waste', label: '丢弃' },
 ]
-const infoForm = reactive({ name: '', generic_name: '', category: 'oral', form: '', spec: '', unit: '', package_spec: '', manufacturer: '', notes: '', low_stock_threshold: 0, expiry_warn_days: 30, unit_price: 0 })
-const stockInForm = reactive({ channel: 'pharmacy', packages: 1, units_per_package: 1, quantity: 0, batch_no: '', expiry_date: '', note: '' })
-const stockOutForm = reactive({ quantity: 0, channel: 'other', reason: '' })
+const infoForm = reactive({ name: '', generic_name: '', category: 'oral', form: '', spec: '', unit: '', package_spec: '', manufacturer: '', notes: '', low_stock_threshold: 0, low_stock_notify_enabled: true, expiry_warn_days: 30, unit_price: 0 })
+const stockInForm = reactive<StockInDraft>(emptyStockInDraft())
+const stockOutForm = reactive<StockOutDraft>(emptyStockOutDraft())
 const showUnitConvert = ref(false)
 const unitFactor = ref(1)
 const isLowStock = computed(() => medicine.value?.stock_status === 'low' || medicine.value?.stock_status === 'out')
@@ -229,13 +236,13 @@ async function load() {
     const [m, b] = await Promise.all([medicineApi.get(book.currentId, Number(route.params.id)), medicineApi.batches(book.currentId, Number(route.params.id))])
     medicine.value = m.data?.data
     batches.value = b.data?.data || []
-    targetStock.value = medicine.value?.stock_quantity || 0
+    Object.assign(stocktakeForm, emptyStocktakeDraft(Number(medicine.value?.stock_quantity || 0)))
     if (medicine.value) {
       Object.assign(infoForm, {
         name: medicine.value.name, generic_name: medicine.value.generic_name || '', category: medicine.value.category,
         form: medicine.value.form || '', spec: medicine.value.spec || '', unit: medicine.value.unit,
         package_spec: medicine.value.package_spec || '', manufacturer: medicine.value.manufacturer || '',
-        notes: medicine.value.notes || '', low_stock_threshold: medicine.value.low_stock_threshold, unit_price: medicine.value.unit_price || 0,
+        notes: medicine.value.notes || '', low_stock_threshold: medicine.value.low_stock_threshold, low_stock_notify_enabled: medicine.value.low_stock_notify_enabled !== false, unit_price: medicine.value.unit_price || 0,
         expiry_warn_days: medicine.value.expiry_warn_days,
       })
     }
@@ -258,7 +265,7 @@ async function loadMoves(reset = true) {
 }
 function openMoves() { tab.value = 'moves'; loadMoves(true) }
 function setMoveType(v: string) { moveType.value = v; loadMoves(true) }
-function openStockIn() { stockInForm.channel = 'pharmacy'; showStockIn.value = true }
+function openStockIn() { Object.assign(stockInForm, emptyStockInDraft()); showStockIn.value = true }
 async function saveInfo() {
   if (!medicine.value) return
   if (!infoForm.name.trim()) { ui.showToast('药品名称不能为空', 'error'); return }
@@ -294,16 +301,39 @@ async function applyUnitConvert(factor: number) {
 }
 async function stockIn() {
   if (!medicine.value) return
+  const qty = stockInQuantity(stockInForm)
+  if (!(qty > 0)) { ui.showToast('请填写入库数量，或填包装数与每包装含量', 'error'); return }
   saving.value = true
-  try { await medicineApi.stockIn(book.currentId!, medicine.value.id, { ...stockInForm }); showStockIn.value = false; Object.assign(stockInForm, { channel: 'pharmacy', packages: 1, units_per_package: 1, quantity: 0, batch_no: '', expiry_date: '', note: '' }); ui.showToast('已入库'); await load(); if (tab.value === 'moves') await loadMoves(true) }
+  try { await medicineApi.stockIn(book.currentId!, medicine.value.id, { ...stockInForm, quantity: qty, batch_no: stockInForm.batch_no, expiry_date: stockInForm.expiry_date }); showStockIn.value = false; Object.assign(stockInForm, emptyStockInDraft()); ui.showToast('已入库'); await load(); if (tab.value === 'moves') await loadMoves(true) }
   catch (e: any) { ui.showToast(e?.response?.data?.message || '入库失败', 'error') }
   finally { saving.value = false }
 }
 function openStockOut() {
-  stockOutForm.quantity = 0
-  stockOutForm.channel = 'other'
-  stockOutForm.reason = ''
+  Object.assign(stockOutForm, emptyStockOutDraft())
   showStockOut.value = true
+}
+// 入库记录 7 天内可改：流水行按入库时间判断，批次卡片由后端给的 editable 决定。
+function within7Days(s?: string) {
+  if (!s) return false
+  return Date.now() - new Date(s).getTime() <= 7 * 24 * 3600 * 1000
+}
+function canEditMove(m: any) { return !!book.canMedicineEdit && m.type === 'in' && !!m.batch_id && within7Days(m.created_at) }
+async function openEditBatch(batchId: number) {
+  if (!batchId || !book.currentId) return
+  try {
+    const res = await medicineApi.getBatch(book.currentId, batchId)
+    editBatch.value = res.data?.data
+    showEditBatch.value = true
+  } catch (e: any) { ui.showToast(e?.response?.data?.message || '读取入库记录失败', 'error') }
+}
+async function onBatchSaved() {
+  showEditBatch.value = false
+  await load()
+  await loadMoves(true)
+}
+function openStocktake() {
+  Object.assign(stocktakeForm, emptyStocktakeDraft(Number(medicine.value?.stock_quantity || 0)))
+  showStocktake.value = true
 }
 async function stockOut() {
   if (!medicine.value) return
@@ -322,7 +352,7 @@ async function stockOut() {
 async function stocktake() {
   if (!medicine.value) return
   saving.value = true
-  try { await medicineApi.stocktake(book.currentId!, medicine.value.id, { target_quantity: targetStock.value, reason: stocktakeReason.value || '盘点' }); showStocktake.value = false; ui.showToast('盘点完成'); await load() }
+  try { await medicineApi.stocktake(book.currentId!, medicine.value.id, { target_quantity: stocktakeForm.target_quantity, reason: stocktakeForm.reason || '盘点' }); showStocktake.value = false; ui.showToast('盘点完成'); await load() }
   catch (e: any) { ui.showToast(e?.response?.data?.message || '盘点失败', 'error') }
   finally { saving.value = false }
 }
@@ -356,6 +386,12 @@ watch(() => book.currentId, () => { router.replace('/medicines') })
 </script>
 
 <style scoped>
+.switch { position: relative; display: inline-flex; width: 44px; height: 26px; flex: 0 0 auto; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--mc-surface-2); border: 1px solid var(--mc-border); transition: .15s; }
+.switch span::after { content: ''; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); transition: .15s; }
+.switch input:checked + span { background: var(--mc-primary); border-color: var(--mc-primary); }
+.switch input:checked + span::after { transform: translateX(18px); }
 .tab-row { margin-bottom: 12px; }
 .editor-line { margin: 0 0 10px; line-height: 1.6; }
 .stock-hero { background: linear-gradient(135deg, var(--mc-primary-soft), var(--mc-surface)); }

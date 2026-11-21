@@ -24,7 +24,10 @@ type ChannelDTO struct {
     LastTestedAt  *time.Time `json:"last_tested_at,omitempty"`
     LastErrorCode string     `json:"last_error_code,omitempty"`
     LastErrorAt   *time.Time `json:"last_error_at,omitempty"`
-    CreatedAt     time.Time  `json:"created_at"`
+    // KeywordSet 表示这个机器人渠道还配着旧的「自定义关键词」——应用已不再在消息里补前缀，
+    // 需要用户改用加签或 IP 白名单，否则机器人会拒收。
+    KeywordSet bool      `json:"keyword_set,omitempty"`
+    CreatedAt  time.Time `json:"created_at"`
 }
 
 type dingTalkConfig struct {
@@ -129,7 +132,18 @@ func handleListChannels(db *gorm.DB) gin.HandlerFunc {
         }
         items := make([]ChannelDTO, 0, len(rows))
         for _, ch := range rows {
-            items = append(items, channelToDTO(ch))
+            dto := channelToDTO(ch)
+            if ch.Type == ChannelDingTalk || ch.Type == ChannelFeishu {
+                var cfg struct {
+                    Keyword string `json:"keyword"`
+                }
+                if plain, err := decryptString(db, ch.ConfigEncrypted); err == nil {
+                    if json.Unmarshal([]byte(plain), &cfg) == nil && strings.TrimSpace(cfg.Keyword) != "" {
+                        dto.KeywordSet = true
+                    }
+                }
+            }
+            items = append(items, dto)
         }
         response.Success(c, items)
     }

@@ -152,7 +152,7 @@ func buildMedicineDTO(m Medicine, today string, agg medicineAggregates) Medicine
         ID: m.ID, BookID: m.BookID, Name: m.Name, GenericName: m.GenericName, Aliases: parseAliases(m.Aliases),
         Category: m.Category, Form: m.Form, Spec: m.Spec, Unit: m.Unit, PackageSpec: m.PackageSpec,
         Manufacturer: m.Manufacturer, Color: m.Color, CoverImageID: m.CoverImageID, Notes: m.Notes, StockQuantity: m.StockQuantity,
-        LowStockThreshold: m.LowStockThreshold, ExpiryWarnDays: m.ExpiryWarnDays, UnitPrice: m.UnitPrice,
+        LowStockThreshold: m.LowStockThreshold, LowStockNotifyEnabled: !m.LowStockNotifyDisabled, ExpiryWarnDays: m.ExpiryWarnDays, UnitPrice: m.UnitPrice,
         StockStatus: stockStatusOf(m, today, agg.expiredBatches[m.ID], nearest), NearestExpiry: nearest,
         ActivePlanCount: agg.activePlans[m.ID], ArchivedAt: m.ArchivedAt, Version: m.Version,
         CreatedByName: agg.userNames[m.CreatedBy], UpdatedByName: agg.userNames[m.UpdatedBy],

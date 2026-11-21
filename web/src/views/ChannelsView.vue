@@ -7,7 +7,7 @@
       <article v-for="ch in channels" :key="ch.id" class="card ch-card">
         <div class="ch-main">
           <div class="type-dot"><AppIcon :name="ch.type === 'email' ? 'bell' : 'members'" :size="18" /></div>
-          <div class="ch-body"><div class="ch-title-row"><b>{{ ch.name }}</b><span class="badge" :class="ch.status === 'active' ? 'done' : 'missed'">{{ ch.status === 'active' ? '已启用' : '异常' }}</span></div><div class="tiny muted" style="margin-top:2px;overflow-wrap:anywhere">{{ typeLabel(ch.type) }} · {{ ch.target_masked }}</div><div v-if="ch.last_error_code" class="tiny" style="color:var(--mc-danger);margin-top:2px">{{ ch.last_error_code }}</div></div>
+          <div class="ch-body"><div class="ch-title-row"><b>{{ ch.name }}</b><span class="badge" :class="ch.status === 'active' ? 'done' : 'missed'">{{ ch.status === 'active' ? '已启用' : '异常' }}</span></div><div class="tiny muted" style="margin-top:2px;overflow-wrap:anywhere">{{ typeLabel(ch.type) }} · {{ ch.target_masked }}</div><div v-if="ch.keyword_set" class="tiny" style="color:var(--mc-danger);margin-top:2px">已设置「自定义关键词」，应用已不再自动补前缀；请把机器人安全设置改成「加签」或 IP 白名单</div><div v-if="ch.last_error_code" class="tiny" style="color:var(--mc-danger);margin-top:2px">{{ ch.last_error_code }}</div></div>
           <button class="icon-btn ch-more" aria-label="更多" @click="openMenu(ch)"><AppIcon name="chevron" :size="18" /></button>
         </div>
         <div v-if="menuId === ch.id" class="ch-actions">
@@ -25,8 +25,8 @@
             <div class="field"><label>渠道类型</label><div class="chip-row"><button type="button" class="chip" :class="{ active: type === 'email' }" @click="type = 'email'">邮件</button><button type="button" class="chip" :class="{ active: type === 'dingtalk' }" @click="type = 'dingtalk'">钉钉</button><button type="button" class="chip" :class="{ active: type === 'feishu' }" @click="type = 'feishu'">飞书</button></div></div>
             <div class="field"><label>名称</label><input v-model="form.name" class="input" required placeholder="例如：家庭群 / 我的邮箱" /></div>
             <template v-if="type === 'email'"><div class="field"><label>收件邮箱</label><input v-model="form.address" type="email" class="input" required /></div></template>
-            <template v-if="type === 'dingtalk'"><div class="field"><label>钉钉 Webhook</label><input v-model="form.webhook" class="input" required placeholder="https://oapi.dingtalk.com/robot/send?access_token=…" /></div><div class="field"><label>自定义关键词（可选）</label><input v-model="form.keyword" class="input" placeholder="机器人安全设置里的关键词，如 yygl" /></div><div class="field"><label>加签密钥（可选）</label><input v-model="form.secret" class="input" placeholder="SEC..." /></div></template>
-            <template v-if="type === 'feishu'"><div class="field"><label>飞书 Webhook</label><input v-model="form.webhook" class="input" required placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" /></div><div class="field"><label>自定义关键词（可选）</label><input v-model="form.keyword" class="input" placeholder="机器人安全设置里的关键词，如 yygl" /></div><div class="field"><label>签名密钥（可选）</label><input v-model="form.secret" class="input" /></div></template>
+            <template v-if="type === 'dingtalk'"><div class="field"><label>钉钉 Webhook</label><input v-model="form.webhook" class="input" required placeholder="https://oapi.dingtalk.com/robot/send?access_token=…" /></div><div class="field"><label>加签密钥（可选）</label><input v-model="form.secret" class="input" placeholder="SEC..." /></div><p class="tiny muted" style="margin:-4px 0 10px">机器人安全设置请选「加签」并填上面的密钥，或改用 IP 白名单；不要再选「自定义关键词」，应用已不再在消息里补关键词前缀。</p></template>
+            <template v-if="type === 'feishu'"><div class="field"><label>飞书 Webhook</label><input v-model="form.webhook" class="input" required placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" /></div><div class="field"><label>签名密钥（可选）</label><input v-model="form.secret" class="input" /></div><p class="tiny muted" style="margin:-4px 0 10px">机器人安全设置请用「签名校验」并填上面的密钥（或用 IP 白名单）；不要用「自定义关键词」，应用已不再在消息里补前缀。</p></template>
             <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="show=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving">{{ saving ? '保存中…' : '保存并启用' }}</button></div>
           </form>
         </section>
@@ -55,7 +55,7 @@ async function load() { loading.value = true; try { const res = await channelApi
 async function save() {
   saving.value = true
   try {
-    const config: any = type.value === 'email' ? { address: form.address } : { webhook: form.webhook, secret: form.secret, keyword: form.keyword }
+    const config: any = type.value === 'email' ? { address: form.address } : { webhook: form.webhook, secret: form.secret }
     const res = await channelApi.create({ type: type.value, name: form.name, enabled: true, config })
     if (res.data?.code !== 0) throw new Error(res.data?.message || '保存失败')
     show.value = false; ui.showToast('渠道已添加'); load()

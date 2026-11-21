@@ -62,6 +62,7 @@ export interface Medicine {
   notes?: string
   stock_quantity: number
   low_stock_threshold: number
+  low_stock_notify_enabled?: boolean
   expiry_warn_days: number
   unit_price?: number
   stock_status: string
@@ -272,11 +273,14 @@ export const medicineApi = {
   alerts: (bookId: number) => request.get(`/api/medcare/books/${bookId}/stock-alerts`),
   importBatch: (bookId: number, data: any) => request.post(`/api/medcare/books/${bookId}/medicines/import`, data),
   transfer: (bookId: number, id: number, data: any) => request.post(`/api/medcare/books/${bookId}/medicines/${id}/transfer`, data),
+  getBatch: (bookId: number, batchId: number) => request.get(`/api/medcare/books/${bookId}/batches/${batchId}`),
+  updateBatch: (bookId: number, batchId: number, data: any) => request.put(`/api/medcare/books/${bookId}/batches/${batchId}`, data),
 }
 
 export interface StockMovementItem {
   id: number
   medicine_id: number
+  batch_id?: number
   medicine_name: string
   unit: string
   type: string

@@ -48,10 +48,8 @@ func messageText(msg notificationMessage) string {
         b.WriteString(line)
         b.WriteString("\n")
     }
-    if msg.Link != "" {
-        b.WriteString("\n打开：")
-        b.WriteString(msg.Link)
-    }
+    // 通知正文不再拼接访问路径：对方看到 /medicines、/today 这类路径既看不懂也不好看，
+    // 需要点进来看的用邮件里的「打开用药管理」按钮即可。
     return strings.TrimSpace(b.String())
 }
 
@@ -201,10 +199,9 @@ func sendDingTalkChannel(ctx context.Context, db *gorm.DB, ch NotificationChanne
         }
         endpoint += sep + "timestamp=" + ts + "&sign=" + sign
     }
+    // 不再在正文前拼「自定义关键词」前缀（用户反馈消息里多出一段【关键词】很难看）。
+    // 机器人安全设置请改用「加签」或 IP 白名单。
     text := messageText(msg)
-    if cfg.Keyword != "" {
-        text = "【" + cfg.Keyword + "】\n" + text
-    }
     payload := map[string]interface{}{
         "msgtype": "markdown",
         "markdown": map[string]string{
@@ -232,10 +229,8 @@ func sendFeishuChannel(ctx context.Context, db *gorm.DB, ch NotificationChannel,
     if err := decryptChannelConfig(db, ch, &cfg); err != nil {
         return "", err
     }
+    // 同上：飞书正文也不再拼自定义关键词前缀，安全设置请用「签名校验」。
     feishuText := messageText(msg)
-    if cfg.Keyword != "" {
-        feishuText = "【" + cfg.Keyword + "】\n" + feishuText
-    }
     payload := map[string]interface{}{
         "msg_type": "text",
         "content":  map[string]string{"text": feishuText},

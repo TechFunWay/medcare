@@ -625,6 +625,10 @@ func runLowStockNotify() {
         var meds []Medicine
         db.Where("book_id = ? AND archived_at IS NULL", bk.ID).Find(&meds)
         for _, m := range meds {
+            // 该药品关掉了低库存提醒就整条跳过（不再使用的药不必天天提醒补货）。
+            if m.LowStockNotifyDisabled {
+                continue
+            }
             level := ""
             if m.StockQuantity <= 0 {
                 level = "out"

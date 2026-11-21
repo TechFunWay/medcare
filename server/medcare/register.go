@@ -138,6 +138,9 @@ func setupAuthRoutes(api *gin.RouterGroup, db *gorm.DB) {
     book.POST("/medicines", requirePermission(db, PermMedicineCreate), handleCreateMedicine(db))
     book.POST("/medicines/import", requirePermission(db, PermMedicineCreate), handleImportMedicines(db))
     book.POST("/medicines/:id/stock-in", requirePermission(db, PermMedicineCreate), handleStockIn(db))
+    // 入库记录 7 天内可改：按批次定位，改数量/批号/有效期/供应商/备注/来源。
+    book.GET("/batches/:batchId", requirePermission(db, PermMedicineView), handleGetBatch(db))
+    book.PUT("/batches/:batchId", requirePermission(db, PermMedicineEdit), handleUpdateStockInBatch(db))
     book.POST("/medicines/:id/stock-out", requirePermission(db, PermMedicineCreate), handleStockOut(db))
     book.PUT("/medicines/:id/cover", requirePermission(db, PermMedicineEdit), handleSetMedicineCover(db))
     book.GET("/medicines/:id/relations", requirePermission(db, PermMedicineView), handleMedicineRelations(db))

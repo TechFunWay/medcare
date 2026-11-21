@@ -177,6 +177,9 @@ type Medicine struct {
     Notes             string     `gorm:"type:text" json:"notes"`
     StockQuantity     float64    `gorm:"not null;default:0" json:"stock_quantity"`
     LowStockThreshold float64    `gorm:"not null;default:0" json:"low_stock_threshold"`
+    // LowStockNotifyDisabled 为 true 时，该药品低于阈值或缺货都不发提醒；
+    // 存「关闭」而非「开启」，是为了让默认值（false）在 GORM 插入零值时也自然生效。
+    LowStockNotifyDisabled bool    `gorm:"not null;default:false" json:"low_stock_notify_disabled"`
     ExpiryWarnDays    int        `gorm:"not null;default:30" json:"expiry_warn_days"`
     // UnitPrice 药品参考单价（元 / 库存单位），人工维护或从收费单识别带入，仅作参考。
     UnitPrice          float64    `gorm:"not null;default:0" json:"unit_price"`

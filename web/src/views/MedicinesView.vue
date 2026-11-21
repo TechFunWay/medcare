@@ -77,6 +77,10 @@
             <div class="field-row"><div class="field"><label>分类</label><select v-model="form.category" class="select"><option value="oral">口服</option><option value="injection">注射</option><option value="infusion">输液</option><option value="topical">外用</option><option value="other">其他</option></select></div><div class="field"><label>剂型</label><SheetSelect v-model="form.form" placeholder="剂型" :options="formOptions()" searchable allow-custom custom-label="没有合适的剂型？自己填" /></div></div>
             <div class="field-row"><div class="field"><label>规格</label><SheetSelect v-model="form.spec" placeholder="规格" :options="specOptions()" searchable allow-custom custom-label="没有合适的规格？自己填" custom-placeholder="例如：0.2g×10片" /></div><div class="field"><label>库存单位</label><SheetSelect v-model="form.unit" placeholder="库存单位" :options="unitOptions()" searchable allow-custom custom-label="没有合适的单位？自己填" /></div></div>
             <div class="field-row"><div class="field"><label>单价（元）</label><input v-model.number="form.unit_price" type="number" min="0" step="0.01" class="input" placeholder="可选，例如 3.50" /></div><div class="field"><label>低库存阈值</label><input v-model.number="form.low_stock_threshold" type="number" min="0" class="input" /></div></div>
+            <div class="field" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+              <div><label style="margin:0">库存不足提醒</label><div class="tiny muted" style="margin-top:2px">关掉后这个药低于阈值或缺货都不再提醒补货</div></div>
+              <label class="switch"><input v-model="form.low_stock_notify_enabled" type="checkbox" /><span /></label>
+            </div>
             <div class="field"><label>临期预警天数</label><input v-model.number="form.expiry_warn_days" type="number" min="1" class="input" /></div>
             <div class="field"><label>备注</label><textarea v-model="form.notes" class="textarea" /></div>
             <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showAdd=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button></div>
@@ -135,7 +139,7 @@ const showScan = ref(false)
 const scan = useScanStore()
 watch(() => scan.requestOpen, (v) => { if (v) { showScan.value = true; scan.requestOpen = false } })
 const saving = ref(false)
-const form = reactive({ name: '', category: 'oral', form: '', spec: '', unit: '片', low_stock_threshold: 0, expiry_warn_days: 30, unit_price: 0, notes: '' })
+const form = reactive({ name: '', category: 'oral', form: '', spec: '', unit: '片', low_stock_threshold: 0, low_stock_notify_enabled: true, expiry_warn_days: 30, unit_price: 0, notes: '' })
 const categories = [{ value: '', label: '全部' }, { value: 'oral', label: '口服' }, { value: 'injection', label: '注射' }, { value: 'infusion', label: '输液' }, { value: 'topical', label: '外用' }, { value: 'other', label: '其他' }]
 const CATEGORY_LABELS: Record<string, string> = { oral: '口服', injection: '注射', infusion: '输液', topical: '外用', other: '其他' }
 function categoryLabel(c: string) { return CATEGORY_LABELS[c] || '其他' }
@@ -189,7 +193,7 @@ function loadCovers() {
 }
 async function create() {
   saving.value = true
-  try { await medicineApi.create(book.currentId!, { ...form }); showAdd.value = false; Object.assign(form, { name: '', category: 'oral', form: '', spec: '', unit: '片', low_stock_threshold: 0, expiry_warn_days: 30, unit_price: 0, notes: '' }); ui.showToast('药品已添加'); load() }
+  try { await medicineApi.create(book.currentId!, { ...form }); showAdd.value = false; Object.assign(form, { name: '', category: 'oral', form: '', spec: '', unit: '片', low_stock_threshold: 0, low_stock_notify_enabled: true, expiry_warn_days: 30, unit_price: 0, notes: '' }); ui.showToast('药品已添加'); load() }
   catch (e: any) { ui.showToast(e?.response?.data?.message || '保存失败', 'error') }
   finally { saving.value = false }
 }
@@ -221,6 +225,12 @@ watch(() => book.currentId, load)
 </script>
 
 <style scoped>
+.switch { position: relative; display: inline-flex; width: 44px; height: 26px; flex: 0 0 auto; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--mc-surface-2); border: 1px solid var(--mc-border); transition: .15s; }
+.switch span::after { content: ''; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); transition: .15s; }
+.switch input:checked + span { background: var(--mc-primary); border-color: var(--mc-primary); }
+.switch input:checked + span::after { transform: translateX(18px); }
 .head-actions { display: flex; gap: 8px; flex: 0 0 auto; align-items: center; }
 .sort-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 8px; }
 .sort-bar-left { display: inline-flex; align-items: center; gap: 6px; color: var(--mc-text-muted); flex: 1 1 auto; min-width: 0; }

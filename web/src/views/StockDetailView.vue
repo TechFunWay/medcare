@@ -79,10 +79,13 @@
         <div class="dr-right">
           <b class="dr-delta" :style="{ color: x.quantity_delta >= 0 ? 'var(--mc-primary-strong)' : 'var(--mc-danger)' }">{{ x.quantity_delta > 0 ? '+' : '' }}{{ x.quantity_delta }}</b>
           <span class="tiny muted">余 {{ x.quantity_after }} {{ x.unit }}</span>
+          <button v-if="canEditMove(x)" type="button" class="btn btn-ghost btn-xs" @click="openEditBatch((x as any).batch_id)"><AppIcon name="edit" :size="14" />修改</button>
         </div>
       </article>
     </div>
     <button v-if="hasMore" class="btn btn-outline btn-block" style="margin-top:10px" :disabled="loading" @click="load(false)">{{ loading ? '加载中…' : '加载更多' }}</button>
+
+    <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="editUnit" @close="showEditBatch=false" @saved="onBatchSaved" />
   </div>
 </template>
 
@@ -93,7 +96,8 @@ import AppIcon from '../components/AppIcon.vue'
 import DateField from '../components/DateField.vue'
 import FilterPanel from '../components/FilterPanel.vue'
 import SheetSelect from '../components/SheetSelect.vue'
-import { stockApi, type StockMovementItem } from '../api/medcare'
+import { medicineApi, stockApi, type StockMovementItem } from '../api/medcare'
+import StockInEditSheet from '../components/StockInEditSheet.vue'
 import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel } from '../utils/stock'
 import { useBookStore } from '../stores/book'
 import { useUIStore } from '../stores/ui'
@@ -101,6 +105,23 @@ import { useUIStore } from '../stores/ui'
 const router = useRouter()
 const book = useBookStore()
 const ui = useUIStore()
+
+const showEditBatch = ref(false)
+const editBatch = ref<any>(null)
+const editUnit = ref('')
+// 入库记录 7 天内可改（后端也会按入库流水创建时间再校验一次）。
+function within7Days(s?: string) { return !!s && Date.now() - new Date(s).getTime() <= 7 * 24 * 3600 * 1000 }
+function canEditMove(x: any) { return !!book.canMedicineEdit && x.type === 'in' && !!x.batch_id && within7Days(x.created_at) }
+async function openEditBatch(batchId: number) {
+  if (!batchId || !book.currentId) return
+  try {
+    const res = await medicineApi.getBatch(book.currentId, batchId)
+    editBatch.value = res.data?.data
+    editUnit.value = (items.value.find((it: any) => it.batch_id === batchId) as any)?.unit || ''
+    showEditBatch.value = true
+  } catch (e: any) { ui.showToast(e?.response?.data?.message || '读取入库记录失败', 'error') }
+}
+async function onBatchSaved() { showEditBatch.value = false; await load(true) }
 
 const keyword = ref('')
 const from = ref('')

@@ -34,6 +34,7 @@ docker buildx build \
   --build-arg "VERSION=$VERSION" \
   --build-arg "BUILD_TIME=$BUILD_TIME" \
   --build-arg "GIT_COMMIT=$GIT_COMMIT" \
+  --build-arg "APK_MIRROR=${APK_MIRROR:-}" \
   -t "$IMAGE:v$VERSION" \
   -t "$IMAGE:latest" \
   --output "type=oci,dest=$OUTPUT_FILE" \

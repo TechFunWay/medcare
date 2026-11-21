@@ -35,6 +35,7 @@ func normalizeStockEntrySource(v string) string {
 type stockMovementDTO struct {
     ID            uint      `json:"id"`
     MedicineID    uint      `json:"medicine_id"`
+    BatchID       *uint     `json:"batch_id,omitempty"`
     MedicineName  string    `json:"medicine_name"`
     Unit          string    `json:"unit"`
     Type          string    `json:"type"`
@@ -233,6 +234,7 @@ func handleListBookStockMovements(db *gorm.DB) gin.HandlerFunc {
             items = append(items, stockMovementDTO{
                 ID:            r.ID,
                 MedicineID:    r.MedicineID,
+                BatchID:       r.BatchID,
                 MedicineName:  m.Name,
                 Unit:          m.Unit,
                 Type:          r.Type,

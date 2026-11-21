@@ -26,6 +26,10 @@
       </button>
     </div>
 
+    <div class="type-bar">
+      <button v-for="t in typeFilters" :key="t.value" class="type-chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">{{ t.label }}</button>
+    </div>
+
     <div class="status-bar">
       <button v-for="s in statusFilters" :key="s.value" class="status-chip" :class="[s.value || 'all', { active: statusFilter === s.value }]" @click="statusFilter = s.value">
         <span>{{ s.label }}</span>
@@ -56,7 +60,7 @@
         </div>
       </section>
 
-      <section v-if="dashboard?.next_event" class="card next-card">
+      <section v-if="dashboard?.next_event && !typeFilter" class="card next-card">
         <div class="next-main">
           <div class="eyebrow">下一项</div>
           <div class="next-title">{{ dashboard.next_event.local_time }} · {{ dashboard.next_event.medicine_name }}</div>
@@ -94,6 +98,7 @@
       </section>
 
       <section v-if="hasTodayEvents && statusFilter && !filteredOverdue.length && !visibleGroups.length" class="card muted">该状态下暂无用药</section>
+      <section v-if="hasTodayEvents && typeFilter && !filteredOverdue.length && !visibleGroups.length" class="card muted">该分类下暂无用药</section>
 
       <section v-if="!hasTodayEvents && (dashboard?.active_plan_count || 0) > 0" class="empty card">
         <div class="empty-icon"><AppIcon name="calendar" :size="30" /></div>
@@ -264,16 +269,28 @@ const allEvents = computed<DoseEvent[]>(() => {
   ;(dashboard.value?.groups || []).forEach((g) => (g.events || []).forEach(push))
   return out
 })
+// 药品分类筛选：口服 / 注射 / 输液 / 外用 / 其他
+const typeFilter = ref('')
+const typeFilters = [
+  { value: '', label: '全部' },
+  { value: 'oral', label: '口服' },
+  { value: 'injection', label: '注射' },
+  { value: 'infusion', label: '输液' },
+  { value: 'topical', label: '外用' },
+  { value: 'other', label: '其他' },
+]
+function matchesType(ev: DoseEvent) { return !typeFilter.value || (ev.type || 'other') === typeFilter.value }
+const typedEvents = computed(() => allEvents.value.filter(matchesType))
 const statusCounts = computed<Record<string, number>>(() => {
-  const c: Record<string, number> = { all: allEvents.value.length, upcoming: 0, due: 0, overdue: 0, done: 0, skipped: 0, missed: 0 }
-  for (const ev of allEvents.value) { const s = eventStatus(ev); c[s] = (c[s] || 0) + 1 }
+  const c: Record<string, number> = { all: typedEvents.value.length, upcoming: 0, due: 0, overdue: 0, done: 0, skipped: 0, missed: 0 }
+  for (const ev of typedEvents.value) { const s = eventStatus(ev); c[s] = (c[s] || 0) + 1 }
   return c
 })
 function matchesStatus(ev: DoseEvent) { return !statusFilter.value || eventStatus(ev) === statusFilter.value }
 // 超时的单独置顶展示，时间分组里不再重复。
 const overdueIds = computed(() => new Set(allEvents.value.filter((ev) => eventStatus(ev) === 'overdue').map((ev) => ev.id)))
 const visibleGroups = computed(() => (dashboard.value?.groups || [])
-  .map((g) => ({ ...g, events: (g.events || []).filter((ev) => !overdueIds.value.has(ev.id)).filter(matchesStatus) }))
+  .map((g) => ({ ...g, events: (g.events || []).filter((ev) => !overdueIds.value.has(ev.id)).filter(matchesType).filter(matchesStatus) }))
   .filter((g) => g.events.length))
 const hasTodayEvents = computed(() => (dashboard.value?.summary?.total || 0) > 0)
 const upcomingLabel = computed(() => {
@@ -282,7 +299,7 @@ const upcomingLabel = computed(() => {
   const day = ev.local_date === localDate() ? '今天' : ev.local_date.slice(5).replace('-', '月') + '日'
   return day + ' ' + ev.local_time
 })
-const filteredOverdue = computed(() => allEvents.value.filter((ev) => eventStatus(ev) === 'overdue').filter(matchesStatus))
+const filteredOverdue = computed(() => allEvents.value.filter((ev) => eventStatus(ev) === 'overdue').filter(matchesType).filter(matchesStatus))
 const dateStrip = computed(() => {
   const out = []
   for (let i = -3; i <= 3; i++) {
@@ -510,6 +527,9 @@ watch(() => book.currentId, load)
   .empty-actions { margin-top: 16px; }
   .alert-row { padding: 12px 14px; gap: 10px; }
 }
+.type-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+.type-chip { flex: 0 0 auto; min-height: 30px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--mc-border); background: transparent; color: var(--mc-text-muted); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.type-chip.active { border-color: var(--mc-primary); background: var(--mc-primary-soft); color: var(--mc-primary-strong); }
 .status-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .status-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--mc-border); background: var(--mc-surface); color: var(--mc-text-muted); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .status-chip b { font-size: 11px; min-width: 16px; padding: 0 4px; border-radius: 999px; background: var(--mc-surface-2); color: var(--mc-text); text-align: center; }

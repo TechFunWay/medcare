@@ -35,6 +35,7 @@ type MedicineDTO struct {
     Notes             string     `json:"notes"`
     StockQuantity     float64    `json:"stock_quantity"`
     LowStockThreshold float64    `json:"low_stock_threshold"`
+    LowStockNotifyEnabled bool   `json:"low_stock_notify_enabled"`
     ExpiryWarnDays    int        `json:"expiry_warn_days"`
     UnitPrice         float64    `json:"unit_price"`
     StockStatus       string     `json:"stock_status"`
@@ -249,6 +250,7 @@ func handleCreateMedicine(db *gorm.DB) gin.HandlerFunc {
             Color             string   `json:"color"`
             Notes             string   `json:"notes"`
             LowStockThreshold float64  `json:"low_stock_threshold"`
+            LowStockNotifyEnabled *bool `json:"low_stock_notify_enabled"`
             ExpiryWarnDays    int      `json:"expiry_warn_days"`
             UnitPrice         float64  `json:"unit_price"`
         }
@@ -281,6 +283,7 @@ func handleCreateMedicine(db *gorm.DB) gin.HandlerFunc {
             BookID: contextBookID(c), Name: in.Name, GenericName: in.GenericName, Aliases: encodeJSON(in.Aliases),
             Category: in.Category, Form: in.Form, Spec: in.Spec, Unit: in.Unit, PackageSpec: in.PackageSpec,
             Manufacturer: in.Manufacturer, Color: in.Color, Notes: in.Notes, LowStockThreshold: in.LowStockThreshold,
+            LowStockNotifyDisabled: in.LowStockNotifyEnabled != nil && !*in.LowStockNotifyEnabled,
             ExpiryWarnDays: in.ExpiryWarnDays, UnitPrice: clampPrice(in.UnitPrice), Version: 1, CreatedBy: userID, UpdatedBy: userID, CreatedAt: now, UpdatedAt: now,
         }
         if err := db.Create(&m).Error; err != nil {
@@ -553,6 +556,7 @@ func handleUpdateMedicine(db *gorm.DB) gin.HandlerFunc {
             Color             string   `json:"color"`
             Notes             string   `json:"notes"`
             LowStockThreshold float64  `json:"low_stock_threshold"`
+            LowStockNotifyEnabled *bool `json:"low_stock_notify_enabled"`
             ExpiryWarnDays    int      `json:"expiry_warn_days"`
             UnitPrice         *float64 `json:"unit_price"`
             Version           uint     `json:"version"`
@@ -584,6 +588,9 @@ func handleUpdateMedicine(db *gorm.DB) gin.HandlerFunc {
         m.Notes = in.Notes
         if in.LowStockThreshold >= 0 {
             m.LowStockThreshold = in.LowStockThreshold
+        }
+        if in.LowStockNotifyEnabled != nil {
+            m.LowStockNotifyDisabled = !*in.LowStockNotifyEnabled
         }
         if in.ExpiryWarnDays > 0 {
             m.ExpiryWarnDays = in.ExpiryWarnDays
@@ -1301,6 +1308,54 @@ func handleArchiveLocation(db *gorm.DB, archive bool) gin.HandlerFunc {
     }
 }
 
+// BatchDTO 是批次对外的结构：在批次字段之上补「来源渠道」与「是否还能改入库记录」，
+// 前端据此决定批次卡片上要不要显示「修改入库」。
+type BatchDTO struct {
+    MedicineBatch
+    Channel   string `json:"channel"`
+    Editable  bool   `json:"editable"`
+    EditUntil string `json:"edit_until,omitempty"`
+}
+
+// batchEditWindow 是入库记录允许修改的时间窗。
+const batchEditWindow = 7 * 24 * time.Hour
+
+// buildBatchDTOs 把批次补上来源渠道与可修改状态（以该批次最早那条入库流水的创建时间为准）。
+func buildBatchDTOs(db *gorm.DB, bookID uint, rows []MedicineBatch) []BatchDTO {
+    out := make([]BatchDTO, 0, len(rows))
+    if len(rows) == 0 {
+        return out
+    }
+    ids := make([]uint, 0, len(rows))
+    for _, b := range rows {
+        ids = append(ids, b.ID)
+    }
+    var mvs []StockMovement
+    db.Where("book_id = ? AND type = ? AND batch_id IN ?", bookID, "in", ids).Order("id ASC").Find(&mvs)
+    mvByBatch := map[uint]StockMovement{}
+    for _, mv := range mvs {
+        if mv.BatchID == nil {
+            continue
+        }
+        if _, ok := mvByBatch[*mv.BatchID]; !ok {
+            mvByBatch[*mv.BatchID] = mv
+        }
+    }
+    now := nowUTC()
+    for _, b := range rows {
+        dto := BatchDTO{MedicineBatch: b}
+        if mv, ok := mvByBatch[b.ID]; ok {
+            dto.Channel = mv.Channel
+            if now.Sub(mv.CreatedAt) <= batchEditWindow {
+                dto.Editable = true
+                dto.EditUntil = mv.CreatedAt.Add(batchEditWindow).In(loadLocation(BeijingTimezone)).Format("2006-01-02 15:04")
+            }
+        }
+        out = append(out, dto)
+    }
+    return out
+}
+
 func handleListBatches(db *gorm.DB) gin.HandlerFunc {
     return func(c *gin.Context) {
         id, ok := parseUintParam(c, "id")
@@ -1312,6 +1367,118 @@ func handleListBatches(db *gorm.DB) gin.HandlerFunc {
             response.ErrorInternal(c, "读取批次失败")
             return
         }
-        response.Success(c, rows)
+        response.Success(c, buildBatchDTOs(db, contextBookID(c), rows))
+    }
+}
+
+func handleGetBatch(db *gorm.DB) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        batchID, ok := parseUintParam(c, "batchId")
+        if !ok {
+            return
+        }
+        var b MedicineBatch
+        if err := db.Where("id = ? AND book_id = ?", batchID, contextBookID(c)).First(&b).Error; err != nil {
+            response.ErrorNotFound(c, "批次不存在")
+            return
+        }
+        dtos := buildBatchDTOs(db, contextBookID(c), []MedicineBatch{b})
+        response.Success(c, dtos[0])
+    }
+}
+
+// handleUpdateStockInBatch 修改一条入库记录（仅限入库后 7 天内）。
+// 只允许在「已消耗数量」之上调整入库总量：batch 的剩余量随差额一起变，
+// 药品库存按批次重算，对应的入库流水数量同步改写，避免账实不符。
+func handleUpdateStockInBatch(db *gorm.DB) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        batchID, ok := parseUintParam(c, "batchId")
+        if !ok {
+            return
+        }
+        var b MedicineBatch
+        if err := db.Where("id = ? AND book_id = ?", batchID, contextBookID(c)).First(&b).Error; err != nil {
+            response.ErrorNotFound(c, "批次不存在")
+            return
+        }
+        var in struct {
+            Quantity   float64 `json:"quantity"`
+            BatchNo    string  `json:"batch_no"`
+            ExpiryDate string  `json:"expiry_date"`
+            Supplier   string  `json:"supplier"`
+            Note       string  `json:"note"`
+            Channel    string  `json:"channel"`
+        }
+        if err := c.ShouldBindJSON(&in); err != nil {
+            response.ErrorBadRequest(c, "参数无效")
+            return
+        }
+        if in.Quantity <= 0 {
+            response.ErrorBadRequest(c, "入库数量必须大于 0")
+            return
+        }
+        if in.ExpiryDate != "" {
+            if _, err := time.Parse("2006-01-02", in.ExpiryDate); err != nil {
+                response.ErrorBadRequest(c, "有效期格式应为 YYYY-MM-DD")
+                return
+            }
+        }
+        var mv StockMovement
+        if err := db.Where("book_id = ? AND batch_id = ? AND type = ?", b.BookID, b.ID, "in").Order("id ASC").First(&mv).Error; err != nil {
+            response.ErrorBadRequest(c, "这条批次不是手动入库记录，不能在这里修改")
+            return
+        }
+        now := nowUTC()
+        if now.Sub(mv.CreatedAt) > batchEditWindow {
+            response.ErrorBadRequest(c, "入库已超过 7 天，不能再修改")
+            return
+        }
+        consumed := b.QuantityInitial - b.QuantityRemaining
+        if consumed < 0 {
+            consumed = 0
+        }
+        if in.Quantity < consumed-0.000001 {
+            response.ErrorBadRequest(c, fmt.Sprintf("该批次已消耗 %.3g，入库数量不能小于它", consumed))
+            return
+        }
+        channel := normalizeStockChannel(in.Channel)
+        if channel == "" {
+            channel = mv.Channel
+        }
+        if channel == "" {
+            channel = StockChannelOther
+        }
+        err := db.Transaction(func(tx *gorm.DB) error {
+            b.QuantityInitial = in.Quantity
+            b.QuantityRemaining = in.Quantity - consumed
+            b.BatchNo = strings.TrimSpace(in.BatchNo)
+            b.ExpiryDate = in.ExpiryDate
+            b.Supplier = strings.TrimSpace(in.Supplier)
+            b.Note = in.Note
+            b.UpdatedAt = now
+            if err := tx.Save(&b).Error; err != nil {
+                return err
+            }
+            mv.QuantityDelta = in.Quantity
+            mv.QuantityAfter = in.Quantity
+            mv.Channel = channel
+            if err := tx.Save(&mv).Error; err != nil {
+                return err
+            }
+            updateMedicineStock(tx, b.BookID, b.MedicineID)
+            return nil
+        })
+        if err != nil {
+            response.ErrorInternal(c, "保存入库记录失败")
+            return
+        }
+        audit.Log(db, c, "medcare_stock_in_update", "medicine", b.MedicineID, fmt.Sprintf("%.3g", in.Quantity))
+        var m Medicine
+        m.ID = b.MedicineID
+        m.BookID = b.BookID
+        reloadMedicine(db, &m)
+        book, _ := getBook(db, b.BookID)
+        dtos := buildBatchDTOs(db, b.BookID, []MedicineBatch{b})
+        response.Success(c, gin.H{"batch": dtos[0], "medicine": medicineToDTO(db, m, todayIn(book.Timezone))})
     }
 }

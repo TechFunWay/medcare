@@ -13,6 +13,10 @@
       <button class="mode-btn" :class="{ active: mode === 'medicine' }" @click="switchMode('medicine')"><AppIcon name="pill" :size="17" />按药名</button>
     </div>
 
+    <div class="chip-row type-row">
+      <button v-for="t in typeFilters" :key="t.value" type="button" class="chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">{{ t.label }}</button>
+    </div>
+
     <!-- ============ 按时间 ============ -->
     <template v-if="mode === 'time'">
       <div class="card time-controls">
@@ -47,13 +51,13 @@
       <div v-if="timeLoading" class="card muted">加载中…</div>
 
       <template v-else-if="timeView === 'day'">
-        <div v-if="!dayEvents.length" class="empty card">
+        <div v-if="!filteredDayEvents.length" class="empty card">
           <div class="empty-icon"><AppIcon name="calendar" :size="28" /></div>
-          <h3>这天没有安排</h3>
+          <h3>{{ typeFilter ? '该分类下这天没有安排' : '这天没有安排' }}</h3>
           <p>可以前后翻一天，或到「按月」看看整月的计划。</p>
         </div>
         <div v-else class="list">
-          <div v-for="ev in dayEvents" :key="ev.id" class="card event-card" @click="router.push('/plans/' + ev.plan_id)">
+          <div v-for="ev in filteredDayEvents" :key="ev.id" class="card event-card" @click="router.push('/plans/' + ev.plan_id)">
             <div class="event-time"><b>{{ ev.local_time }}</b><span>{{ eventStatus(ev.status) }}</span></div>
             <div class="event-main">
               <div class="event-title"><b>{{ ev.medicine_name }}</b><span class="badge" :class="eventBadge(ev.status)">{{ eventStatus(ev.status) }}</span></div>
@@ -81,7 +85,7 @@
           <p class="tiny muted" style="margin-top:10px">点某天可切到按天查看；圆点表示当天有未完成/漏服/已完成安排。</p>
         </div>
 
-        <div class="section-head" style="margin-top:16px"><h2>本月安排</h2><span class="tiny muted">共 {{ monthTotal }} 项</span></div>
+        <div class="section-head" style="margin-top:16px"><h2>本月安排</h2><span class="tiny muted">共 {{ typeFilter ? filteredMonthEvents.length : monthTotal }} 项</span></div>
         <div v-if="!monthGroups.length" class="empty card"><div class="empty-icon"><AppIcon name="calendar" :size="28" /></div><h3>这个月还没有安排</h3><p>切换月份或先新建计划。</p></div>
         <div v-else class="list">
           <div v-for="group in monthGroups" :key="group.date" class="card month-group">
@@ -185,6 +189,20 @@ const monthTotal = ref(0)
 const monthCounts = ref<Record<string, { total: number; pending: number; done: number; missed: number; skipped: number }>>({})
 const timeLoading = ref(false)
 
+// 药品分类筛选：口服 / 注射 / 输液 / 外用 / 其他
+const typeFilter = ref('')
+const typeFilters = [
+  { value: '', label: '全部' },
+  { value: 'oral', label: '口服' },
+  { value: 'injection', label: '注射' },
+  { value: 'infusion', label: '输液' },
+  { value: 'topical', label: '外用' },
+  { value: 'other', label: '其他' },
+]
+function matchesType(t?: string) { return !typeFilter.value || (t || 'other') === typeFilter.value }
+const filteredDayEvents = computed(() => dayEvents.value.filter((ev) => matchesType(ev.type)))
+const filteredMonthEvents = computed(() => monthEvents.value.filter((ev) => matchesType(ev.type)))
+
 const plans = ref<Plan[]>([])
 const planLoading = ref(true)
 const status = ref('active')
@@ -205,7 +223,7 @@ const frequencyLabel = frequencyLabelShared
 
 const monthGroups = computed(() => {
   const map = new Map<string, DoseEvent[]>()
-  for (const ev of monthEvents.value) {
+  for (const ev of filteredMonthEvents.value) {
     if (!map.has(ev.local_date)) map.set(ev.local_date, [])
     map.get(ev.local_date)!.push(ev)
   }
@@ -217,6 +235,7 @@ const medicineGroups = computed(() => {
   const map = new Map<string, { key: string; name: string; plans: Plan[]; nextText: string }>()
   const q = medQuery.value.trim().toLowerCase()
   for (const p of plans.value) {
+    if (!matchesType(p.type)) continue
     // 按药名视图支持搜索：药品名或计划标题命中即保留该计划。
     if (q) {
       const hay = ((p.medicine_name || '') + ' ' + (p.title || '')).toLowerCase()
@@ -312,6 +331,7 @@ watch(() => book.currentId, () => { loadDay(); loadPlans() })
 <style scoped>
 .head-actions { display: flex; gap: 8px; flex: 0 0 auto; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .empty-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+.type-row { margin-bottom: 10px; }
 .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--mc-surface-2); border: 1px solid var(--mc-border); border-radius: 12px; margin-bottom: 12px; }
 .mode-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; border: 0; background: transparent; color: var(--mc-text-muted); padding: 6px 10px; border-radius: 9px; font-weight: 700; cursor: pointer; }
 .mode-btn.active { background: var(--mc-surface); color: var(--mc-primary-strong); box-shadow: 0 1px 4px rgba(20,40,30,.08); }

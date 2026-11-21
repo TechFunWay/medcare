@@ -158,31 +158,15 @@
             <div v-if="picked" class="tiny muted" style="margin:-6px 0 10px">当前库存：{{ picked.stock_quantity }} {{ picked.unit }}</div>
 
             <div v-if="action === 'in'">
-              <div class="field-row">
-                <div class="field"><label>入库数量（{{ picked?.unit || '单位' }}）</label><input v-model.number="form.quantity" type="number" min="0" step="0.01" class="input" placeholder="例如 2" /></div>
-                <div class="field"><label>来源</label><SheetSelect v-model="form.channel" placeholder="选择来源" :options="channelOptions" /></div>
-              </div>
-              <div class="field-row">
-                <div class="field"><label>批次号（可空）</label><input v-model="form.batchNo" class="input" placeholder="例如 20261101" /></div>
-                <div class="field"><label>有效期（可空）</label><DateField v-model="form.expiryDate" placeholder="选择日期" clearable /></div>
-              </div>
-              <div class="field"><label>供应商（可空）</label><input v-model="form.supplier" class="input" /></div>
-              <div class="field"><label>备注（可空）</label><input v-model="form.note" class="input" /></div>
+              <StockInFields :model-value="inForm" :unit="picked?.unit || ''" @update:model-value="(v) => Object.assign(inForm, v)" />
             </div>
 
             <div v-else-if="action === 'out'">
-              <div class="field-row">
-                <div class="field"><label>出库数量（{{ picked?.unit || '单位' }}）</label><input v-model.number="form.quantity" type="number" min="0" step="0.01" class="input" placeholder="例如 1" /></div>
-                <div class="field"><label>用途</label><SheetSelect v-model="form.channel" placeholder="选择用途" :options="channelOptions" /></div>
-              </div>
-              <div class="field"><label>原因</label><input v-model="form.reason" class="input" placeholder="例如：过期丢弃 / 借出 / 带走" /></div>
-              <p class="tiny muted" style="margin:-4px 0 8px">出库按先进先出扣批次，数量不能超过当前库存。</p>
+              <StockOutFields :model-value="outForm" :unit="picked?.unit || ''" @update:model-value="(v) => Object.assign(outForm, v)" />
             </div>
 
             <div v-else>
-              <div class="field"><label>实际数量（盘点后）</label><input v-model.number="form.targetQuantity" type="number" min="0" step="0.01" class="input" placeholder="盘点后剩余多少" /></div>
-              <div class="field"><label>盘点原因</label><input v-model="form.reason" class="input" placeholder="例如：月度盘点 / 损耗核对" /></div>
-              <p class="tiny muted" style="margin:-4px 0 8px">盘点只把库存改成实际数量，多退少补；不是出库。</p>
+              <StocktakeFields :model-value="takeForm" :unit="picked?.unit || ''" @update:model-value="(v) => Object.assign(takeForm, v)" />
             </div>
 
             <div class="sheet-foot">
@@ -206,7 +190,10 @@ import SheetSelect from '../components/SheetSelect.vue'
 import MedicinePicker from '../components/MedicinePicker.vue'
 import DateField from '../components/DateField.vue'
 import { medicineApi, stockApi, type Medicine, type StockMovementItem } from '../api/medcare'
-import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel } from '../utils/stock'
+import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel, emptyStockInDraft, stockInQuantity, emptyStockOutDraft, emptyStocktakeDraft, type StockInDraft, type StockOutDraft, type StocktakeDraft } from '../utils/stock'
+import StockInFields from '../components/StockInFields.vue'
+import StockOutFields from '../components/StockOutFields.vue'
+import StocktakeFields from '../components/StocktakeFields.vue'
 import { fetchAllPages } from '../utils/paging'
 import { formatDate } from '../utils/date'
 import { useBookStore } from '../stores/book'
@@ -300,34 +287,33 @@ type Action = '' | 'in' | 'out' | 'stocktake'
 const action = ref<Action>('')
 const saving = ref(false)
 const form = reactive({ medicineId: 0, quantity: 0, targetQuantity: 0, reason: '', channel: 'pharmacy', batchNo: '', expiryDate: '', supplier: '', note: '' })
+// 入库用独立草稿，与药品详情页共用同一个表单组件与默认值。
+const inForm = reactive<StockInDraft>(emptyStockInDraft())
+const outForm = reactive<StockOutDraft>(emptyStockOutDraft())
+const takeForm = reactive<StocktakeDraft>(emptyStocktakeDraft())
 const channelOptions = STOCK_CHANNEL_OPTIONS
 const medicineOptions = computed(() => medicines.value.map((m) => ({ value: m.id, label: m.name + (m.spec ? ' · ' + m.spec : '') + `（${m.stock_quantity} ${m.unit}）` })))
 const picked = computed(() => medicines.value.find((m) => m.id === form.medicineId) || null)
 const actionTitle = computed(() => (action.value === 'in' ? '入库' : action.value === 'out' ? '出库' : '盘点'))
 const canSubmit = computed(() => {
   if (!form.medicineId) return false
-  if (action.value === 'in') return Number(form.quantity) > 0
-  if (action.value === 'out') return Number(form.quantity) > 0
-  return form.targetQuantity !== null && form.targetQuantity !== undefined && Number(form.targetQuantity) >= 0
+  if (action.value === 'in') return stockInQuantity(inForm) > 0
+  if (action.value === 'out') return Number(outForm.quantity) > 0
+  return takeForm.target_quantity !== null && takeForm.target_quantity !== undefined && Number(takeForm.target_quantity) >= 0
 })
 function openAction(kind: Action, m?: Medicine) {
   action.value = kind
   form.medicineId = m ? m.id : medicines.value.length === 1 ? medicines.value[0].id : 0
-  form.quantity = 0
-  form.targetQuantity = m ? Number(m.stock_quantity) : 0
-  form.reason = ''
-  form.channel = 'pharmacy'
-  form.batchNo = ''
-  form.expiryDate = ''
-  form.supplier = ''
-  form.note = ''
+  Object.assign(inForm, emptyStockInDraft())
+  Object.assign(outForm, emptyStockOutDraft())
+  Object.assign(takeForm, emptyStocktakeDraft(m ? Number(m.stock_quantity) : 0))
 }
 function closeAction() { if (!saving.value) action.value = '' }
 function pickMedicine(v: any) {
   const id = Number(v) || 0
   form.medicineId = id
   const m = medicines.value.find((x) => x.id === id)
-  if (m && action.value === 'stocktake') form.targetQuantity = Number(m.stock_quantity)
+  if (m && action.value === 'stocktake') takeForm.target_quantity = Number(m.stock_quantity)
 }
 async function submitAction() {
   if (!canSubmit.value || !book.currentId) return
@@ -335,16 +321,14 @@ async function submitAction() {
   saving.value = true
   try {
     if (action.value === 'in') {
-      await medicineApi.stockIn(book.currentId, id, {
-        quantity: Number(form.quantity), channel: form.channel, batch_no: form.batchNo, expiry_date: form.expiryDate,
-        supplier: form.supplier, note: form.note,
-      })
-      ui.showToast(`已入库 ${form.quantity} ${picked.value?.unit || ''}`)
+      const qty = stockInQuantity(inForm)
+      await medicineApi.stockIn(book.currentId, id, { ...inForm, quantity: qty })
+      ui.showToast(`已入库 ${qty} ${picked.value?.unit || ''}`)
     } else if (action.value === 'out') {
-      await medicineApi.stockOut(book.currentId, id, { quantity: Number(form.quantity), channel: form.channel, reason: form.reason })
-      ui.showToast(`已出库 ${form.quantity} ${picked.value?.unit || ''}`)
+      await medicineApi.stockOut(book.currentId, id, { ...outForm, quantity: Number(outForm.quantity) })
+      ui.showToast(`已出库 ${outForm.quantity} ${picked.value?.unit || ''}`)
     } else {
-      await medicineApi.stocktake(book.currentId, id, { target_quantity: Number(form.targetQuantity), reason: form.reason || '盘点' })
+      await medicineApi.stocktake(book.currentId, id, { target_quantity: Number(takeForm.target_quantity), reason: takeForm.reason || '盘点' })
       ui.showToast('盘点完成，库存已更新')
     }
     action.value = ''
