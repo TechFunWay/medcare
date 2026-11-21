@@ -1,0 +1,64 @@
+# Binaries（构建产物输出到 build/，不要写 server/medcare，那是业务包目录）
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Data
+server/data/
+data/
+dev/data/
+*.db
+*.db-journal
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+
+# Compiled frontend served by the backend (run `make build-frontend` to regenerate)
+server/static/dist/
+
+# Agent / IDE side artifacts (kept out of git)
+.omo/
+.playwright-mcp/
+memory/
+.claude/*
+!.claude/skills/
+.opencode/
+
+# Build output
+dev/
+build/
+release/
+dist/
+*.tar.gz
+*.zip
+*.fpk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# ---------- 本地临时目录 ----------
+# 临时测试与调试文件统一放这里，目录内内容不入库（仅保留 .gitkeep 占位）
+tmp/*
+!tmp/.gitkeep
+
+# AI 工具本地目录
+.zcode/
+.mimocode/

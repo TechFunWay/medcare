@@ -1,0 +1,102 @@
+/* 登录 / 注册 / 邀请页统一外壳：窄屏单列居中，宽屏左侧介绍 + 右侧表单，矮屏自动收紧 */
+.auth-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(10px, 3vh, 32px) 16px;
+  background:
+    radial-gradient(circle at 15% 5%, var(--mc-primary-soft), transparent 46%),
+    radial-gradient(circle at 92% 92%, var(--mc-accent-soft), transparent 44%),
+    var(--mc-bg);
+}
+.auth-layout {
+  width: 100%;
+  max-width: 420px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  align-items: center;
+}
+.auth-hero { display: none; }
+.auth-hero-title { font-size: clamp(22px, 2.4vw, 30px); line-height: 1.35; letter-spacing: -.02em; margin: 22px 0 18px; }
+.auth-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.auth-points li { position: relative; padding-left: 22px; color: var(--mc-text-muted); font-size: 14px; line-height: 1.6; }
+.auth-points li::before { content: ''; position: absolute; left: 0; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--mc-primary); }
+.auth-hero-note { margin-top: 26px; font-size: 12px; line-height: 1.7; color: var(--mc-text-muted); }
+
+.auth-brand { display: flex; align-items: center; gap: 12px; }
+.auth-brand--compact { margin-bottom: 22px; }
+.auth-mark {
+  width: 46px; height: 46px; border-radius: 15px; background: var(--mc-primary); color: #fff;
+  display: grid; place-items: center; font-size: 21px; font-weight: 800; flex: 0 0 auto;
+}
+.auth-brand-name { font-weight: 800; font-size: 19px; letter-spacing: -.02em; }
+.auth-brand-sub { font-size: 11px; color: var(--mc-text-muted); margin-top: 1px; }
+
+.auth-card { width: 100%; max-width: 420px; margin: 0 auto; padding: clamp(22px, 3vw, 30px) clamp(18px, 2.4vw, 26px); }
+.auth-foot { margin-top: 18px; text-align: center; }
+.link { color: var(--mc-primary-strong); font-weight: 700; }
+.auth-note { margin-top: 20px; line-height: 1.7; text-align: center; }
+.form-error { color: var(--mc-danger); background: var(--mc-danger-soft); padding: 10px 12px; border-radius: 12px; font-size: 12px; margin-bottom: 12px; }
+.first-run-hint {
+  display: grid; gap: 3px; margin-bottom: 18px; padding: 12px 14px; border-radius: 14px;
+  background: var(--mc-primary-soft); color: var(--mc-primary-strong); font-size: 12px; line-height: 1.6;
+}
+.first-run-hint b { font-size: 12px; }
+.first-run-hint span { color: var(--mc-text-muted); }
+
+/* 宽屏：左侧介绍 + 右侧表单 */
+@media (min-width: 900px) {
+  .auth-layout { max-width: 940px; grid-template-columns: minmax(0, 1fr) 400px; gap: clamp(24px, 5vw, 56px); }
+  .auth-hero { display: block; }
+  .auth-brand--compact { display: none; }
+  .auth-card { max-width: none; }
+}
+
+/* 矮屏：收紧卡片内部，避免出现纵向滚动条 */
+@media (max-height: 760px) {
+  .auth-page { padding: 10px 16px; }
+  .auth-brand--compact { margin-bottom: 14px; }
+  .auth-mark { width: 40px; height: 40px; font-size: 18px; border-radius: 13px; }
+  .auth-brand-name { font-size: 17px; }
+  .auth-card { padding: 18px 20px; }
+  .auth-card h1 { font-size: 23px !important; margin: 4px 0 !important; }
+  .auth-card > p { margin-bottom: 12px !important; }
+  .auth-card .field { margin-bottom: 10px; }
+  .auth-card .input { min-height: 44px; padding: 9px 13px; }
+  .auth-foot { margin-top: 12px; }
+  .auth-note { margin-top: 12px; }
+}
+@media (max-height: 660px) {
+  .auth-hero { display: none !important; }
+  .auth-layout { grid-template-columns: minmax(0, 1fr); max-width: 420px; }
+  .auth-brand--compact { display: flex; }
+  .auth-card { max-width: 420px; }
+  .auth-note { display: none; }
+}
+/* 极矮屏（常见于浏览器窗口被压缩）：进一步压缩卡片内部，保证一屏不滚动 */
+@media (max-height: 660px) {
+  .auth-card { padding: 14px 18px; }
+  .auth-card > p { font-size: 12px; margin-bottom: 8px !important; }
+  .first-run-hint { padding: 9px 11px; margin-bottom: 10px; font-size: 11px; }
+  .auth-card .field { margin-bottom: 8px; }
+  .auth-foot { margin-top: 8px; }
+}
+@media (max-height: 700px) {
+  .first-run-hint { display: none; }
+  .auth-card > p { font-size: 12px; line-height: 1.5; margin-bottom: 10px !important; }
+}
+@media (max-height: 560px) {
+  .auth-brand--compact { margin-bottom: 8px; }
+  .auth-mark { width: 32px; height: 32px; font-size: 15px; border-radius: 10px; }
+  .auth-brand-name { font-size: 15px; }
+  .auth-brand-sub { display: none; }
+  .auth-card h1 { font-size: 19px !important; }
+  .auth-card .field { margin-bottom: 6px; gap: 3px; }
+  .auth-card .field > label { font-size: 11px; }
+  .auth-card .input { min-height: 38px; padding: 7px 11px; }
+  .first-run-hint { display: none; }
+  .auth-foot { margin-top: 6px; }
+}

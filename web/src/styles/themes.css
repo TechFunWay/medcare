@@ -1,0 +1,352 @@
+/* 主题系统：亮/暗模式 + 5 种配色。
+ * 基础令牌（浅色 + 配色 A）在 style.css 的 :root；本文件负责：
+ *   .dark             → 暗色令牌
+ *   .brand-b ~ .brand-e → 其他配色（浅色）
+ *   .dark.brand-x     → 对应的暗色配色
+ * 每套配色不仅换主色，连页面背景 / 卡片 / 分隔线 / 文字灰度一起换（2026-11-16 用户要求：
+ * 选配色后整个页面背景都要跟着变，不能只变按钮）。
+ */
+
+/* ================= 暗色（配色 A 暖绿） ================= */
+.dark {
+  --mc-bg: #121714;
+  --mc-surface: #1b231e;
+  --mc-surface-2: #22302a;
+  --mc-text: #edf3ee;
+  --mc-text-muted: #9baaa0;
+  --mc-border: #2c3a31;
+  --mc-primary: #8fb9a0;
+  --mc-primary-strong: #a8ceb6;
+  --mc-primary-soft: #26382d;
+  --mc-accent: #f0b98d;
+  --mc-accent-soft: #3a2b20;
+  --mc-danger: #e08b8b;
+  --mc-danger-soft: #3a2424;
+  --mc-warning: #d9b06a;
+  --mc-warning-soft: #3a3020;
+  --mc-info: #91b1d8;
+  --mc-info-soft: #223245;
+  --mc-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+}
+.dark body { background: var(--mc-bg); }
+.dark .bottom-nav, .dark .topbar { background: var(--mc-surface); }
+.dark .btn-primary { color: #10201a; }
+.dark .fab { color: #10201a; }
+.dark .date-pill.active b, .dark .date-pill.active span { color: #10201a; }
+.dark .check.done svg, .dark .check { color: #10201a; }
+
+/* ================= B 清风医疗（蓝） ================= */
+.brand-b {
+  --mc-bg: #f3f7fc;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #e9f0f9;
+  --mc-text: #202b38;
+  --mc-text-muted: #6e7f92;
+  --mc-border: #d9e4f2;
+  --mc-primary: #2f7fd8;
+  --mc-primary-strong: #1f63b0;
+  --mc-primary-soft: #e3effc;
+  --mc-accent: #17b8a6;
+  --mc-accent-soft: #dff6f2;
+  --mc-info: #2f7fd8;
+  --mc-info-soft: #e3effc;
+}
+.dark.brand-b {
+  --mc-bg: #0f151d;
+  --mc-surface: #161f2a;
+  --mc-surface-2: #1e2a38;
+  --mc-text: #eaf1f8;
+  --mc-text-muted: #92a2b4;
+  --mc-border: #2a3949;
+  --mc-primary: #6fb0f0;
+  --mc-primary-strong: #9ccbf7;
+  --mc-primary-soft: #1c3047;
+  --mc-accent: #4fd8c8;
+  --mc-accent-soft: #143430;
+  --mc-info: #8fc2f2;
+  --mc-info-soft: #1c3047;
+}
+
+/* ================= C 深夜护航（薄荷） ================= */
+.brand-c {
+  --mc-bg: #f2f8f4;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #e7f3ec;
+  --mc-text: #22302a;
+  --mc-text-muted: #6f8579;
+  --mc-border: #d6e8dd;
+  --mc-primary: #3f9a74;
+  --mc-primary-strong: #2f7a5a;
+  --mc-primary-soft: #dff2e8;
+  --mc-accent: #e08a4a;
+  --mc-accent-soft: #fbe9d8;
+}
+.dark.brand-c {
+  --mc-bg: #0e1613;
+  --mc-surface: #15221b;
+  --mc-surface-2: #1c2f25;
+  --mc-text: #eaf4ee;
+  --mc-text-muted: #90a79a;
+  --mc-border: #274033;
+  --mc-primary: #7fd1a8;
+  --mc-primary-strong: #a5e3c2;
+  --mc-primary-soft: #22392e;
+  --mc-accent: #ffb27a;
+  --mc-accent-soft: #3a2b20;
+}
+
+/* ================= D 柔光珊瑚（珊瑚橘） ================= */
+.brand-d {
+  --mc-bg: #fcf4f1;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #f7e9e4;
+  --mc-text: #33241f;
+  --mc-text-muted: #8d766e;
+  --mc-border: #eed9d1;
+  --mc-primary: #e2705f;
+  --mc-primary-strong: #c4533f;
+  --mc-primary-soft: #fde5e0;
+  --mc-accent: #f0a868;
+  --mc-accent-soft: #fdf0df;
+  --mc-warning: #d2913c;
+  --mc-warning-soft: #fcf0dd;
+}
+.dark.brand-d {
+  --mc-bg: #191211;
+  --mc-surface: #251a18;
+  --mc-surface-2: #312320;
+  --mc-text: #f6edea;
+  --mc-text-muted: #b19a92;
+  --mc-border: #42302b;
+  --mc-primary: #f09283;
+  --mc-primary-strong: #f7b3a7;
+  --mc-primary-soft: #3d2a27;
+  --mc-accent: #f5bd8a;
+  --mc-accent-soft: #3a2c20;
+  --mc-warning: #e6b268;
+  --mc-warning-soft: #3a3020;
+}
+
+/* ================= E 素简黑白（靛蓝强调） ================= */
+.brand-e {
+  --mc-bg: #f5f5f4;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #ececeb;
+  --mc-text: #26262a;
+  --mc-text-muted: #7a7a78;
+  --mc-border: #dedddb;
+  --mc-primary: #2b2f36;
+  --mc-primary-strong: #111318;
+  --mc-primary-soft: #eceef1;
+  --mc-accent: #4f46e5;
+  --mc-accent-soft: #eceafd;
+}
+.dark.brand-e {
+  --mc-bg: #121212;
+  --mc-surface: #1b1b1b;
+  --mc-surface-2: #252525;
+  --mc-text: #f2f2f2;
+  --mc-text-muted: #a3a3a1;
+  --mc-border: #333333;
+  --mc-primary: #d7dbe2;
+  --mc-primary-strong: #f2f4f7;
+  --mc-primary-soft: #2a3038;
+  --mc-accent: #8f88f2;
+  --mc-accent-soft: #262a45;
+}
+.dark.brand-e .btn-primary, .dark.brand-e .fab { color: #12141a; }
+
+/* ================= F 海盐青柠（青绿） ================= */
+.brand-f {
+  --mc-bg: #f2f9f7;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #e4f2ee;
+  --mc-text: #1d2b28;
+  --mc-text-muted: #6b8480;
+  --mc-border: #d3e8e2;
+  --mc-primary: #14a58c;
+  --mc-primary-strong: #0c7f6c;
+  --mc-primary-soft: #ddf4ef;
+  --mc-accent: #f2b33d;
+  --mc-accent-soft: #fdf1d8;
+  --mc-info: #14a58c;
+  --mc-info-soft: #ddf4ef;
+}
+.dark.brand-f {
+  --mc-bg: #0e1715;
+  --mc-surface: #16211e;
+  --mc-surface-2: #1e2c28;
+  --mc-text: #e9f4f1;
+  --mc-text-muted: #8fa6a1;
+  --mc-border: #293a35;
+  --mc-primary: #4fcbb2;
+  --mc-primary-strong: #7adcc7;
+  --mc-primary-soft: #1d3330;
+  --mc-accent: #f3c76b;
+  --mc-accent-soft: #332b1c;
+  --mc-info: #4fcbb2;
+  --mc-info-soft: #1d3330;
+}
+.dark.brand-f .btn-primary, .dark.brand-f .fab { color: #08211c; }
+.dark.brand-f .date-pill.active b, .dark.brand-f .date-pill.active span { color: #08211c; }
+.dark.brand-f .check.done svg, .dark.brand-f .check { color: #08211c; }
+
+/* ================= G 紫丁护理（紫） ================= */
+.brand-g {
+  --mc-bg: #f7f4fc;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #ede7f8;
+  --mc-text: #2a2436;
+  --mc-text-muted: #7d748f;
+  --mc-border: #e2d9f2;
+  --mc-primary: #7b5cd6;
+  --mc-primary-strong: #6242bd;
+  --mc-primary-soft: #ebe4fb;
+  --mc-accent: #38b2a3;
+  --mc-accent-soft: #ddf5f1;
+  --mc-info: #7b5cd6;
+  --mc-info-soft: #ebe4fb;
+}
+.dark.brand-g {
+  --mc-bg: #14111c;
+  --mc-surface: #1d1928;
+  --mc-surface-2: #262034;
+  --mc-text: #efeaf8;
+  --mc-text-muted: #a09ab2;
+  --mc-border: #342c46;
+  --mc-primary: #a992ea;
+  --mc-primary-strong: #c4b3f4;
+  --mc-primary-soft: #2c2540;
+  --mc-accent: #6cd3c5;
+  --mc-accent-soft: #1e332f;
+  --mc-info: #a992ea;
+  --mc-info-soft: #2c2540;
+}
+.dark.brand-g .btn-primary, .dark.brand-g .fab { color: #17122a; }
+.dark.brand-g .date-pill.active b, .dark.brand-g .date-pill.active span { color: #17122a; }
+.dark.brand-g .check.done svg, .dark.brand-g .check { color: #17122a; }
+
+/* ================= H 暖咖玫瑰（棕粉） ================= */
+.brand-h {
+  --mc-bg: #fbf6f2;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #f3e8e0;
+  --mc-text: #33261f;
+  --mc-text-muted: #8b7568;
+  --mc-border: #ecdbd0;
+  --mc-primary: #c07a5a;
+  --mc-primary-strong: #a25d3f;
+  --mc-primary-soft: #f8e7dd;
+  --mc-accent: #d94f7a;
+  --mc-accent-soft: #fbe2ea;
+  --mc-warning: #c98a3a;
+  --mc-warning-soft: #faf0dd;
+  --mc-info: #c07a5a;
+  --mc-info-soft: #f8e7dd;
+}
+.dark.brand-h {
+  --mc-bg: #1a1411;
+  --mc-surface: #241c18;
+  --mc-surface-2: #2e2420;
+  --mc-text: #f6efe9;
+  --mc-text-muted: #b3a196;
+  --mc-border: #3f322c;
+  --mc-primary: #e0a184;
+  --mc-primary-strong: #efc0a8;
+  --mc-primary-soft: #38291f;
+  --mc-accent: #ef8fae;
+  --mc-accent-soft: #3a2530;
+  --mc-warning: #dda76a;
+  --mc-warning-soft: #382c1e;
+  --mc-info: #e0a184;
+  --mc-info-soft: #38291f;
+}
+.dark.brand-h .btn-primary, .dark.brand-h .fab { color: #201410; }
+.dark.brand-h .date-pill.active b, .dark.brand-h .date-pill.active span { color: #201410; }
+.dark.brand-h .check.done svg, .dark.brand-h .check { color: #201410; }
+
+/* ================= I 琥珀晨光（橙金） ================= */
+.brand-i {
+  /* 浅色版：背景接近白、主色降饱和提亮，按钮文字改深色保证对比。 */
+  --mc-bg: #fffdf8;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #fdf6e9;
+  --mc-text: #3a3226;
+  --mc-text-muted: #94886f;
+  --mc-border: #f2e7d3;
+  --mc-primary: #efb44e;
+  --mc-primary-strong: #a9711a;
+  --mc-primary-soft: #fdf3e0;
+  --mc-accent: #55a89c;
+  --mc-accent-soft: #e8f5f2;
+  --mc-warning: #d9a03a;
+  --mc-warning-soft: #fdf6e4;
+  --mc-info: #efb44e;
+  --mc-info-soft: #fdf3e0;
+}
+.brand-i .btn-primary, .brand-i .fab { color: #4a3408; }
+.brand-i .date-pill.active b, .brand-i .date-pill.active span { color: #4a3408; }
+.brand-i .check.done svg, .brand-i .check { color: #4a3408; }
+.dark.brand-i {
+  --mc-bg: #1a1509;
+  --mc-surface: #241d10;
+  --mc-surface-2: #2f2616;
+  --mc-text: #f7f0e2;
+  --mc-text-muted: #b3a68c;
+  --mc-border: #41351f;
+  --mc-primary: #f0b64f;
+  --mc-primary-strong: #f7cd82;
+  --mc-primary-soft: #3a2d13;
+  --mc-accent: #6ecdc0;
+  --mc-accent-soft: #1e3733;
+  --mc-warning: #e5b467;
+  --mc-warning-soft: #3a2f1a;
+  --mc-info: #f0b64f;
+  --mc-info-soft: #3a2d13;
+}
+.dark.brand-i .btn-primary, .dark.brand-i .fab { color: #241a06; }
+.dark.brand-i .date-pill.active b, .dark.brand-i .date-pill.active span { color: #241a06; }
+.dark.brand-i .check.done svg, .dark.brand-i .check { color: #241a06; }
+
+/* ================= J 樱粉心意（玫粉） ================= */
+.brand-j {
+  /* 浅色版：粉白底 + 柔粉主色，按钮文字用深色。 */
+  --mc-bg: #fffbfc;
+  --mc-surface: #ffffff;
+  --mc-surface-2: #fdf0f5;
+  --mc-text: #3a2b32;
+  --mc-text-muted: #9a7f8b;
+  --mc-border: #f6e2ea;
+  --mc-primary: #f287ad;
+  --mc-primary-strong: #b03f6b;
+  --mc-primary-soft: #fdeef4;
+  --mc-accent: #7e9fe0;
+  --mc-accent-soft: #eaf0fc;
+  --mc-danger: #e07070;
+  --mc-danger-soft: #fdeceb;
+  --mc-info: #f287ad;
+  --mc-info-soft: #fdeef4;
+}
+.brand-j .btn-primary, .brand-j .fab { color: #4d1027; }
+.brand-j .date-pill.active b, .brand-j .date-pill.active span { color: #4d1027; }
+.brand-j .check.done svg, .brand-j .check { color: #4d1027; }
+.dark.brand-j {
+  --mc-bg: #1a1015;
+  --mc-surface: #241821;
+  --mc-surface-2: #30202b;
+  --mc-text: #f8ecf2;
+  --mc-text-muted: #b59aa6;
+  --mc-border: #422c39;
+  --mc-primary: #f2789f;
+  --mc-primary-strong: #f7a4c1;
+  --mc-primary-soft: #3c2130;
+  --mc-accent: #8fadea;
+  --mc-accent-soft: #222c45;
+  --mc-danger: #ef8b8b;
+  --mc-danger-soft: #3a2222;
+  --mc-info: #f2789f;
+  --mc-info-soft: #3c2130;
+}
+.dark.brand-j .btn-primary, .dark.brand-j .fab { color: #2b0f1c; }
+.dark.brand-j .date-pill.active b, .dark.brand-j .date-pill.active span { color: #2b0f1c; }
+.dark.brand-j .check.done svg, .dark.brand-j .check { color: #2b0f1c; }
