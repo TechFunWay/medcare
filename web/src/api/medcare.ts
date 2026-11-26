@@ -91,6 +91,7 @@ export interface Plan {
   book_id: number
   medicine_id: number
   medicine_name: string
+  medicine_missing?: boolean
   location_id?: number
   location_name?: string
   address?: string
@@ -129,6 +130,7 @@ export interface DoseEvent {
   plan_id: number
   medicine_id: number
   medicine_name: string
+  medicine_missing?: boolean
   plan_title?: string
   type: string
   dose_amount: number
@@ -282,6 +284,7 @@ export interface StockMovementItem {
   medicine_id: number
   batch_id?: number
   medicine_name: string
+  medicine_missing?: boolean
   unit: string
   type: string
   quantity_delta: number
@@ -404,6 +407,7 @@ export const statsApi = {
 export const channelApi = {
   list: () => request.get('/api/medcare/channels'),
   create: (data: any) => request.post('/api/medcare/channels', data),
+  config: (id: number) => request.get(`/api/medcare/channels/${id}/config`),
   update: (id: number, data: any) => request.put(`/api/medcare/channels/${id}`, data),
   remove: (id: number) => request.delete(`/api/medcare/channels/${id}`),
   test: (id: number) => request.post(`/api/medcare/channels/${id}/test`),

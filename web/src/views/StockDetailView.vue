@@ -15,9 +15,15 @@
           <button v-if="keyword" class="search-clear" aria-label="清空" @click="keyword = ''"><AppIcon name="close" :size="16" /></button>
         </div>
       </template>
+      <div class="filter-group-title">录入时间段</div>
       <div class="field-row">
         <div class="field"><label>开始日期</label><DateField v-model="from" placeholder="不限" clearable /></div>
         <div class="field"><label>结束日期</label><DateField v-model="to" placeholder="不限" clearable /></div>
+      </div>
+      <div class="filter-group-title">批次时间段</div>
+      <div class="field-row">
+        <div class="field"><label>批次入库开始</label><DateField v-model="batchFrom" placeholder="不限" clearable /></div>
+        <div class="field"><label>批次入库结束</label><DateField v-model="batchTo" placeholder="不限" clearable /></div>
       </div>
       <div class="field-row">
         <div class="field"><label>来源</label><SheetSelect v-model="channel" placeholder="全部来源" :options="channelFilterOptions" /></div>
@@ -61,9 +67,13 @@
       <article v-for="x in items" :key="x.id" class="card detail-row">
         <div class="dr-main">
           <div class="dr-title">
-            <b>{{ x.medicine_name }}</b>
+            <b>{{ x.medicine_name || '药品已删除' }}</b>
             <span class="badge" :class="movementBadge(x.type)">{{ movementTypeLabel(x.type) }}</span>
             <span class="badge pending">{{ entrySourceLabel(x.entry_source) }}</span>
+            <span v-if="(x as any).medicine_missing" class="badge missed">药品已删除</span>
+          </div>
+          <div v-if="(x as any).medicine_missing" class="tiny" style="color:var(--mc-danger);margin-top:2px">
+            这条记录归属的药品已被删除，可点「修改」重新选择所属药品
           </div>
           <div class="tiny muted dr-meta">
             <span>操作时间 {{ formatFull(x.created_at) }}</span>
@@ -85,7 +95,7 @@
     </div>
     <button v-if="hasMore" class="btn btn-outline btn-block" style="margin-top:10px" :disabled="loading" @click="load(false)">{{ loading ? '加载中…' : '加载更多' }}</button>
 
-    <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="editUnit" @close="showEditBatch=false" @saved="onBatchSaved" />
+    <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="editUnit" :medicines="editMedicines" @close="showEditBatch=false" @saved="onBatchSaved" />
   </div>
 </template>
 
@@ -96,7 +106,7 @@ import AppIcon from '../components/AppIcon.vue'
 import DateField from '../components/DateField.vue'
 import FilterPanel from '../components/FilterPanel.vue'
 import SheetSelect from '../components/SheetSelect.vue'
-import { medicineApi, stockApi, type StockMovementItem } from '../api/medcare'
+import { medicineApi, stockApi, type Medicine, type StockMovementItem } from '../api/medcare'
 import StockInEditSheet from '../components/StockInEditSheet.vue'
 import { STOCK_CHANNEL_OPTIONS, channelLabel, entrySourceLabel, movementBadge, movementTypeLabel } from '../utils/stock'
 import { useBookStore } from '../stores/book'
@@ -109,23 +119,32 @@ const ui = useUIStore()
 const showEditBatch = ref(false)
 const editBatch = ref<any>(null)
 const editUnit = ref('')
+// 修改入库记录时可改归属药品：列出本用药本里未删除的药品。
+const editMedicines = ref<Medicine[]>([])
 // 入库记录 7 天内可改（后端也会按入库流水创建时间再校验一次）。
 function within7Days(s?: string) { return !!s && Date.now() - new Date(s).getTime() <= 7 * 24 * 3600 * 1000 }
 function canEditMove(x: any) { return !!book.canMedicineEdit && x.type === 'in' && !!x.batch_id && within7Days(x.created_at) }
 async function openEditBatch(batchId: number) {
   if (!batchId || !book.currentId) return
   try {
-    const res = await medicineApi.getBatch(book.currentId, batchId)
+    const [res, list] = await Promise.all([
+      medicineApi.getBatch(book.currentId, batchId),
+      medicineApi.list(book.currentId, { pageSize: 200 }),
+    ])
     editBatch.value = res.data?.data
     editUnit.value = (items.value.find((it: any) => it.batch_id === batchId) as any)?.unit || ''
+    editMedicines.value = (list.data?.data?.items || []) as Medicine[]
     showEditBatch.value = true
   } catch (e: any) { ui.showToast(e?.response?.data?.message || '读取入库记录失败', 'error') }
 }
 async function onBatchSaved() { showEditBatch.value = false; await load(true) }
 
 const keyword = ref('')
+// 录入时间段（按流水创建时间）与批次时间段（按批次入库时间）分开两组条件。
 const from = ref('')
 const to = ref('')
+const batchFrom = ref('')
+const batchTo = ref('')
 const type = ref('')
 const channel = ref('')
 const sort = ref('time_desc')
@@ -148,10 +167,10 @@ const sortOptions = [
   { value: 'time_asc', label: '时间：旧 → 新' },
   { value: 'medicine', label: '按药品排序' },
 ]
-const hasFilter = computed(() => !!(keyword.value || from.value || to.value || type.value || channel.value))
+const hasFilter = computed(() => !!(keyword.value || from.value || to.value || batchFrom.value || batchTo.value || type.value || channel.value))
 const filtersOpen = ref(false)
 // 折叠态只显示搜索；这里的条数只统计「点筛选才展开」的条件，不含关键词。
-const activeFilterCount = computed(() => [from.value, to.value, type.value, channel.value].filter(Boolean).length)
+const activeFilterCount = computed(() => [from.value, to.value, batchFrom.value, batchTo.value, type.value, channel.value].filter(Boolean).length)
 
 // 日期按北京时间换算成 UTC 区间，与后端存储的 UTC 时间对齐。
 function isoStart(d: string) { return new Date(d + 'T00:00:00+08:00').toISOString() }
@@ -167,6 +186,8 @@ async function loadStats() {
   const params: any = { type: type.value, channel: channel.value, keyword: keyword.value.trim() }
   if (from.value) params.from = isoStart(from.value)
   if (to.value) params.to = isoEnd(to.value)
+  if (batchFrom.value) params.batch_from = isoStart(batchFrom.value)
+  if (batchTo.value) params.batch_to = isoEnd(batchTo.value)
   try {
     const res = await stockApi.movementsStats(book.currentId, params)
     if (res.data?.code === 0) Object.assign(stats, res.data.data)
@@ -181,6 +202,8 @@ async function load(reset = true) {
     const params: any = { page: target, pageSize: 20, type: type.value, channel: channel.value, sort: sort.value, keyword: keyword.value.trim() }
     if (from.value) params.from = isoStart(from.value)
     if (to.value) params.to = isoEnd(to.value)
+    if (batchFrom.value) params.batch_from = isoStart(batchFrom.value)
+    if (batchTo.value) params.batch_to = isoEnd(batchTo.value)
     const res = await stockApi.movements(book.currentId, params)
     const list = (res.data?.data?.items || []) as StockMovementItem[]
     items.value = reset ? list : items.value.concat(list)
@@ -197,7 +220,7 @@ async function load(reset = true) {
 function setType(v: string) { type.value = v }
 // 顶部统计卡点击即筛选（不用再点「查询」）。
 function pickType(v: string) { type.value = type.value === v ? '' : v; load(true) }
-function resetFilters() { keyword.value = ''; from.value = ''; to.value = ''; type.value = ''; channel.value = ''; sort.value = 'time_desc'; load(true) }
+function resetFilters() { keyword.value = ''; from.value = ''; to.value = ''; batchFrom.value = ''; batchTo.value = ''; type.value = ''; channel.value = ''; sort.value = 'time_desc'; load(true) }
 
 function formatFull(v?: string) {
   if (!v) return ''
@@ -211,6 +234,9 @@ watch(() => book.currentId, () => load(true))
 </script>
 
 <style scoped>
+/* 两组时间条件的分组小标题，避免和普通字段标签混淆 */
+.filter-group-title { margin: 6px 0 6px; font-size: 12.5px; font-weight: 700; color: var(--mc-text-muted); letter-spacing: .02em; }
+.filter-group-title:first-child { margin-top: 0; }
 .mv-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 @media (max-width: 560px) { .mv-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .mv-stat { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--mc-border); background: var(--mc-surface); }

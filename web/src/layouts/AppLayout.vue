@@ -49,7 +49,7 @@
         </header>
 
         <div v-if="support.bannerVisible" class="support-banner">
-          <span class="support-banner-text">❤ 如果这个应用对你有帮助，欢迎 <button class="support-banner-link" @click="support.show = true">请作者喝杯咖啡</button>（不赞赏不影响任何功能）。</span>
+          <span class="support-banner-text">❤ 如果这个应用对你有帮助，欢迎 <button class="support-banner-link" @click="support.open()">请作者喝杯咖啡</button>（不赞赏不影响任何功能）。</span>
           <button class="support-banner-close" aria-label="关闭支持提示" @click="support.dismissBanner()"><AppIcon name="close" :size="15" /></button>
         </div>
 

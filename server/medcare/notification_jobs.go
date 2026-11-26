@@ -4,6 +4,7 @@ import (
     "context"
     "errors"
     "fmt"
+    "sort"
     "strings"
     "time"
 
@@ -299,6 +300,21 @@ func reclaimStaleSendingJobs(db *gorm.DB) int64 {
     return res.RowsAffected
 }
 
+// mergeableKindGroup 把任务按「能否合并进同一条消息」归类：
+// 用药提醒类的多个事件可以合成一条；每日总结、库存提醒、测试各自独立。
+func mergeableKindGroup(kind string) string {
+    switch kind {
+    case JobSummary:
+        return "summary"
+    case JobLowStock:
+        return "lowstock"
+    case JobTest:
+        return "test"
+    default:
+        return "reminder"
+    }
+}
+
 func runNotificationWorker() {
     db := realtimeDB
     if db == nil {
@@ -306,12 +322,188 @@ func runNotificationWorker() {
     }
     reclaimStaleSendingJobs(db)
     var jobs []NotificationJob
-    if err := db.Where("status IN ? AND run_at <= ?", []string{JobPending, JobRetry}, nowUTC()).Order("run_at ASC").Limit(30).Find(&jobs).Error; err != nil {
+    if err := db.Where("status IN ? AND run_at <= ?", []string{JobPending, JobRetry}, nowUTC()).Order("run_at ASC").Limit(80).Find(&jobs).Error; err != nil {
         logger.Error("medcare: load notification jobs: %v", err)
         return
     }
-    for _, job := range jobs {
+    batches, singles := partitionReminderJobs(jobs)
+    for _, batch := range batches {
+        processNotificationJobBatch(db, batch)
+    }
+    for _, job := range singles {
         processNotificationJob(db, job)
+    }
+}
+
+// buildMergedReminderMessage 把多条用药提醒合成一条消息：
+// 每条占两行（药品（类型）剂量 / 原计划时间与超时时长），按计划时间排序。
+func buildMergedReminderMessage(bookName string, events []DoseEvent, allOverdue bool, now time.Time) notificationMessage {
+    sorted := make([]DoseEvent, len(events))
+    copy(sorted, events)
+    sort.Slice(sorted, func(a, b int) bool { return sorted[a].ScheduledAt.Before(sorted[b].ScheduledAt) })
+    lines := make([]string, 0, len(sorted)*2)
+    for _, ev := range sorted {
+        lines = append(lines, fmt.Sprintf("%s（%s） %.3g %s", ev.MedicineName, categoryLabelCN(ev.Type), ev.DoseAmount, ev.DoseUnit))
+        planLine := "原计划 " + ev.LocalTime
+        if !ev.ScheduledAt.IsZero() {
+            if overdue := now.Sub(ev.ScheduledAt); overdue > time.Minute {
+                planLine += "，已超时 " + humanDurationCN(overdue)
+            }
+        }
+        lines = append(lines, planLine)
+    }
+    title := fmt.Sprintf("用药提醒 · %d 项", len(sorted))
+    if allOverdue {
+        title = fmt.Sprintf("还没吃药 · 再次提醒（%d 项）", len(sorted))
+    }
+    return notificationMessage{BookName: bookName, Title: title, Lines: lines}
+}
+
+// partitionReminderJobs 把「能合并进一条消息」的用药提醒按
+// 用药本 + 收件人 + 渠道 分组；其余任务原样返回、逐条处理。
+// 只有一个成员的批次也并入 singles，避免为了单条走批处理。
+func partitionReminderJobs(jobs []NotificationJob) (batches [][]NotificationJob, singles []NotificationJob) {
+    type batchKey struct {
+        bookID    uint
+        userID    uint
+        channelID uint
+        channel   string
+    }
+    grouped := map[batchKey][]NotificationJob{}
+    order := make([]batchKey, 0)
+    for _, job := range jobs {
+        if job.EventID != nil && job.ChannelType != ChannelInApp && mergeableKindGroup(job.Kind) == "reminder" {
+            k := batchKey{job.BookID, job.RecipientUserID, job.ChannelID, job.ChannelType}
+            if _, ok := grouped[k]; !ok {
+                order = append(order, k)
+            }
+            grouped[k] = append(grouped[k], job)
+            continue
+        }
+        singles = append(singles, job)
+    }
+    for _, k := range order {
+        if len(grouped[k]) >= 2 {
+            batches = append(batches, grouped[k])
+        } else {
+            singles = append(singles, grouped[k]...)
+        }
+    }
+    return batches, singles
+}
+
+// processNotificationJobBatch 把同一渠道的一批用药提醒合成一条消息发出。
+// 已被完成/跳过的条目直接取消，不计入正文；全部失效时整批取消、不发空消息。
+func processNotificationJobBatch(db *gorm.DB, jobs []NotificationJob) {
+    if len(jobs) == 0 {
+        return
+    }
+    now := nowUTC()
+    ids := make([]uint, 0, len(jobs))
+    for _, j := range jobs {
+        ids = append(ids, j.ID)
+    }
+    res := db.Model(&NotificationJob{}).Where("id IN ? AND status IN ?", ids, []string{JobPending, JobRetry}).
+        Updates(map[string]interface{}{"status": JobSending, "locked_at": &now, "worker_id": "medcare-worker"})
+    if res.RowsAffected == 0 {
+        return
+    }
+    var claimed []NotificationJob
+    db.Where("id IN ? AND status = ?", ids, JobSending).Find(&claimed)
+    if len(claimed) == 0 {
+        return
+    }
+    first := claimed[0]
+    book, err := getBook(db, first.BookID)
+    if err != nil {
+        for _, j := range claimed {
+            markJobFailed(db, j, "BOOK_NOT_FOUND", "用药本不存在", 0, true)
+        }
+        return
+    }
+    type item struct {
+        job NotificationJob
+        ev  DoseEvent
+    }
+    items := make([]item, 0, len(claimed))
+    var canceled []uint
+    allOverdue := true
+    for _, j := range claimed {
+        if j.EventID == nil {
+            canceled = append(canceled, j.ID)
+            continue
+        }
+        var ev DoseEvent
+        if err := db.Where("id = ? AND book_id = ?", *j.EventID, j.BookID).First(&ev).Error; err != nil {
+            canceled = append(canceled, j.ID)
+            continue
+        }
+        if ev.Status == EventDone || ev.Status == EventSkipped {
+            canceled = append(canceled, j.ID)
+            continue
+        }
+        if mergeableKindGroup(j.Kind) == "reminder" {
+            switch j.Kind {
+            case JobOverdue1, JobOverdue2:
+            default:
+                if !strings.HasPrefix(j.Kind, JobOverdueRepeatPrefix) {
+                    allOverdue = false
+                }
+            }
+        }
+        items = append(items, item{job: j, ev: ev})
+    }
+    if len(canceled) > 0 {
+        for _, id := range canceled {
+            markJobCanceled(db, id)
+        }
+    }
+    if len(items) == 0 {
+        return
+    }
+    events := make([]DoseEvent, 0, len(items))
+    for _, it := range items {
+        events = append(events, it.ev)
+    }
+    msg := buildMergedReminderMessage(book.Name, events, allOverdue, now)
+    msg.Link = publicBaseURL(db, nil) + "/today"
+
+    start := nowUTC()
+    var ch NotificationChannel
+    if err := db.Where("id = ? AND user_id = ? AND archived_at IS NULL", first.ChannelID, first.RecipientUserID).First(&ch).Error; err != nil {
+        for _, it := range items {
+            markJobFailed(db, it.job, "CHANNEL_NOT_FOUND", "通知渠道不存在", 0, true)
+        }
+        return
+    }
+    if !ch.Enabled || ch.Status != "active" {
+        for _, it := range items {
+            markJobFailed(db, it.job, "CHANNEL_DISABLED", "通知渠道已停用", 0, true)
+        }
+        return
+    }
+    sendCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+    defer cancel()
+    _, sendErr := sendChannelMessage(sendCtx, db, ch, msg)
+    latency := time.Since(start).Milliseconds()
+    if sendErr == nil {
+        for _, it := range items {
+            db.Model(&NotificationJob{}).Where("id = ?", it.job.ID).Updates(map[string]interface{}{
+                "status": JobSent, "attempts": it.job.Attempts + 1, "locked_at": nil,
+                "last_error_code": "", "last_error_message": "", "updated_at": nowUTC(),
+            })
+            recordAttempt(db, it.job.ID, it.job.Attempts+1, start, "success", "", latency, fmt.Sprintf("merged:%d", len(items)))
+        }
+        return
+    }
+    var de *deliveryError
+    permanent := errors.As(sendErr, &de) && de.Permanent
+    code := "SEND_FAILED"
+    if errors.As(sendErr, &de) {
+        code = de.Code
+    }
+    for _, it := range items {
+        markJobFailed(db, it.job, code, sendErr.Error(), latency, permanent)
     }
 }
 
@@ -374,9 +566,6 @@ func processNotificationJob(db *gorm.DB, job NotificationJob) {
     }
     if strings.HasPrefix(job.Kind, JobOverdueRepeatPrefix) {
         msg.Title = "还没吃药 · 再次提醒"
-        if ev.LocalTime != "" {
-            msg.Title += " · " + ev.LocalTime
-        }
     }
     start := nowUTC()
     var sendErr error
@@ -445,25 +634,72 @@ func notificationJobTitle(kind string, ev DoseEvent) string {
     case JobLead:
         return "用药提醒 · 即将到点"
     case JobOverdue1:
-        return "逾期提醒 · " + ev.LocalTime
+        return "逾期提醒"
     case JobOverdue2:
-        return "再次提醒 · " + ev.LocalTime
+        return "再次提醒"
     case JobSummary:
         return "今日用药总结"
     case JobRemind:
-        return "有人提醒你用药 · " + ev.LocalTime
+        return "有人提醒你用药"
     case JobTest:
         return "用药管理测试提醒"
     default:
-        return "用药提醒 · " + ev.LocalTime
+        return "用药提醒"
     }
+}
+
+// categoryLabelCN 把药品分类翻成中文，用在通知里说明这是一条口服/注射/输液的药。
+func categoryLabelCN(cat string) string {
+    switch cat {
+    case CatOral:
+        return "口服"
+    case CatInjection:
+        return "注射"
+    case CatInfusion:
+        return "输液"
+    case CatTopical:
+        return "外用"
+    default:
+        return "其他"
+    }
+}
+
+// humanDurationCN 把时长写成「X 天 Y 小时 Z 分钟」，用于告诉用户超时了多久。
+func humanDurationCN(d time.Duration) string {
+    if d < 0 {
+        d = 0
+    }
+    total := int(d.Minutes())
+    days := total / (24 * 60)
+    hours := (total % (24 * 60)) / 60
+    mins := total % 60
+    parts := make([]string, 0, 3)
+    if days > 0 {
+        parts = append(parts, fmt.Sprintf("%d 天", days))
+    }
+    if hours > 0 {
+        parts = append(parts, fmt.Sprintf("%d 小时", hours))
+    }
+    if mins > 0 || len(parts) == 0 {
+        parts = append(parts, fmt.Sprintf("%d 分钟", mins))
+    }
+    return strings.Join(parts, " ")
 }
 
 func notificationJobLines(ev DoseEvent, pref UserPreference) []string {
     if ev.ID == 0 {
         return []string{"这是一条测试消息。"}
     }
-    lines := []string{fmt.Sprintf("%s %.3g %s", ev.MedicineName, ev.DoseAmount, ev.DoseUnit)}
+    // 第一行先说明药品与剂型，用户一眼能分清这条是吃药还是打针输液。
+    lines := []string{fmt.Sprintf("%s（%s） %.3g %s", ev.MedicineName, categoryLabelCN(ev.Type), ev.DoseAmount, ev.DoseUnit)}
+    // 原计划时间 + 已超时时长：到点前只显示计划时间，过点后补上超时多久。
+    planLine := "原计划 " + ev.LocalTime
+    if !ev.ScheduledAt.IsZero() {
+        if overdue := nowUTC().Sub(ev.ScheduledAt); overdue > time.Minute {
+            planLine += "，已超时 " + humanDurationCN(overdue)
+        }
+    }
+    lines = append(lines, planLine)
     if ev.LocationName != "" && pref.IncludeLocationInNotifications {
         line := "地点：" + ev.LocationName
         if ev.Address != "" {

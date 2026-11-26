@@ -14,6 +14,10 @@
       <div class="small"><b>你还没有「计划管理」的权限</b></div>
       <p class="tiny muted" style="margin-top:4px">这份计划只能查看。需要新建或改动，请让管理员在「用药本 → 成员与权限 → 设置权限」里给你开通「计划管理」。</p>
     </div>
+    <div v-if="!isNew && plan?.medicine_missing" class="card missing-tip" style="margin-bottom:12px">
+      <div class="small" style="color:var(--mc-danger);font-weight:700">这个计划关联的药品已被删除</div>
+      <p class="tiny muted" style="margin-top:4px;line-height:1.6">当前药品「{{ plan?.medicine_name || '未知' }}」已不在药品表里，打卡时会提示库存不足。请在下面「药品」里重新选择一个现有药品并保存，计划会改挂到新药品上。</p>
+    </div>
     <div v-if="loading" class="card muted">加载中…</div>
     <form v-else class="card" @submit.prevent="save">
       <div class="field">
@@ -423,6 +427,7 @@ watch(() => book.currentId, () => { if (!isNew.value) router.replace('/plans') }
 </script>
 
 <style scoped>
+.missing-tip { border-color: var(--mc-danger); }
 .shot-card { margin-bottom: 12px; background: var(--mc-surface-2); }
 .custom-day-list { display: grid; gap: 10px; margin-bottom: 10px; }
 .batch-toggle { margin-top: 8px; }

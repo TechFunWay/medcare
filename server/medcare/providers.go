@@ -37,9 +37,10 @@ func (e *deliveryError) Error() string { return e.Message }
 func messageText(msg notificationMessage) string {
     var b strings.Builder
     if msg.BookName != "" {
-        b.WriteString("【用药管理】")
+        // 用药本名称用方括号括起来，前面保留【用药管理】标识。
+        b.WriteString("【用药管理】[")
         b.WriteString(msg.BookName)
-        b.WriteString("\n")
+        b.WriteString("]\n")
     }
     b.WriteString(msg.Title)
     b.WriteString("\n")
@@ -181,6 +182,27 @@ func smtpErrorHint(host string, err error) string {
     return "邮件发送失败：" + trimRunes(err.Error(), 160)
 }
 
+// dingTalkPayload 组装钉钉 markdown 消息。
+// 机器人用「自定义关键词」校验时，请求里必须出现该关键词，否则钉钉直接拒收；
+// 用户又不想在通知正文里看到它，所以两处一起带：
+//  1) title 里带关键词——气泡正文不显示 title，只在会话列表预览里出现；
+//  2) text 末尾再放一个「文本为空」的链接，href 里带关键词，气泡里看不到字。
+func dingTalkPayload(cfg dingTalkConfig, msg notificationMessage) map[string]interface{} {
+    text := messageText(msg)
+    title := msg.Title
+    if cfg.Keyword != "" {
+        title = msg.Title + " " + cfg.Keyword
+        text += "\n\n[\u200b](https://techfunway.invalid/kw/" + url.PathEscape(cfg.Keyword) + ")"
+    }
+    return map[string]interface{}{
+        "msgtype": "markdown",
+        "markdown": map[string]string{
+            "title": title,
+            "text":  text,
+        },
+    }
+}
+
 func sendDingTalkChannel(ctx context.Context, db *gorm.DB, ch NotificationChannel, msg notificationMessage) (string, error) {
     var cfg dingTalkConfig
     if err := decryptChannelConfig(db, ch, &cfg); err != nil {
@@ -199,22 +221,32 @@ func sendDingTalkChannel(ctx context.Context, db *gorm.DB, ch NotificationChanne
         }
         endpoint += sep + "timestamp=" + ts + "&sign=" + sign
     }
-    // 不再在正文前拼「自定义关键词」前缀（用户反馈消息里多出一段【关键词】很难看）。
-    // 机器人安全设置请改用「加签」或 IP 白名单。
-    text := messageText(msg)
-    payload := map[string]interface{}{
-        "msgtype": "markdown",
-        "markdown": map[string]string{
-            "title": msg.Title,
-            "text":  text,
-        },
-    }
+    payload := dingTalkPayload(cfg, msg)
     var out struct {
         ErrCode *int   `json:"errcode"`
         ErrMsg  string `json:"errmsg"`
     }
     if err := postJSON(ctx, endpoint, "", payload, &out); err != nil {
         return "", err
+    }
+    // 关键词校验没过时兜底：把关键词明文放到正文最前面重试一次。
+    // 钉钉对「关键词是否算数」的判定跟消息类型有关，藏链接里不一定被认，
+    // 与其发不出去，不如宁可正文多一行前缀——至少提醒能到达。
+    if cfg.Keyword != "" && out.ErrCode != nil && *out.ErrCode != 0 && strings.Contains(out.ErrMsg, "关键词") {
+        payload = map[string]interface{}{
+            "msgtype": "markdown",
+            "markdown": map[string]string{
+                "title": msg.Title,
+                "text":  "【" + cfg.Keyword + "】\n" + messageText(msg),
+            },
+        }
+        out = struct {
+            ErrCode *int   `json:"errcode"`
+            ErrMsg  string `json:"errmsg"`
+        }{}
+        if err := postJSON(ctx, endpoint, "", payload, &out); err != nil {
+            return "", err
+        }
     }
     if out.ErrCode != nil && *out.ErrCode != 0 {
         code := *out.ErrCode
@@ -224,16 +256,52 @@ func sendDingTalkChannel(ctx context.Context, db *gorm.DB, ch NotificationChanne
     return "", nil
 }
 
+// feishuPostContent 把消息转成飞书富文本行；关键词放进最后一行「文本为空」的链接地址，
+// 这样既满足「自定义关键词」校验，又不在聊天窗口里露出这段文字。
+func feishuPostContent(msg notificationMessage, keyword string) [][]map[string]interface{} {
+    rows := make([][]map[string]interface{}, 0, len(msg.Lines)+3)
+    if msg.BookName != "" {
+        rows = append(rows, []map[string]interface{}{{"tag": "text", "text": "【用药管理】" + msg.BookName}})
+    }
+    rows = append(rows, []map[string]interface{}{{"tag": "text", "text": msg.Title}})
+    for _, line := range msg.Lines {
+        rows = append(rows, []map[string]interface{}{{"tag": "text", "text": "· " + line}})
+    }
+    if keyword != "" {
+        rows = append(rows, []map[string]interface{}{{
+            "tag":  "a",
+            "text": "",
+            "href": "https://techfunway.invalid/kw/" + url.PathEscape(keyword),
+        }})
+    }
+    return rows
+}
+
 func sendFeishuChannel(ctx context.Context, db *gorm.DB, ch NotificationChannel, msg notificationMessage) (string, error) {
     var cfg feishuConfig
     if err := decryptChannelConfig(db, ch, &cfg); err != nil {
         return "", err
     }
-    // 同上：飞书正文也不再拼自定义关键词前缀，安全设置请用「签名校验」。
     feishuText := messageText(msg)
-    payload := map[string]interface{}{
-        "msg_type": "text",
-        "content":  map[string]string{"text": feishuText},
+    var payload map[string]interface{}
+    if cfg.Keyword != "" {
+        // 飞书同理：用富文本把关键词放进「文本为空」的链接地址里，正文看不到它。
+        payload = map[string]interface{}{
+            "msg_type": "post",
+            "content": map[string]interface{}{
+                "post": map[string]interface{}{
+                    "zh_cn": map[string]interface{}{
+                        "title":   msg.Title,
+                        "content": feishuPostContent(msg, cfg.Keyword),
+                    },
+                },
+            },
+        }
+    } else {
+        payload = map[string]interface{}{
+            "msg_type": "text",
+            "content":  map[string]string{"text": feishuText},
+        }
     }
     if cfg.Secret != "" {
         ts := fmt.Sprintf("%d", nowUTC().Unix())

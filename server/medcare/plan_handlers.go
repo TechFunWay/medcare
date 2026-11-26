@@ -39,6 +39,9 @@ type PlanDTO struct {
     BookID               uint         `json:"book_id"`
     MedicineID           uint         `json:"medicine_id"`
     MedicineName         string       `json:"medicine_name"`
+    // MedicineMissing 表示这个计划关联的药品已被删除（归档），计划仍保留但需要改挂到别的药品，
+    // 否则打卡时会因库存为 0 而提示库存不足。
+    MedicineMissing bool `json:"medicine_missing"`
     LocationID           *uint        `json:"location_id,omitempty"`
     LocationName         string       `json:"location_name"`
     Address              string       `json:"address"`
@@ -79,6 +82,8 @@ type DoseEventDTO struct {
     PlanID          uint       `json:"plan_id"`
     MedicineID      uint       `json:"medicine_id"`
     MedicineName    string     `json:"medicine_name"`
+    // MedicineMissing 表示这条用药记录的药品已被删除（归档）或查不到，打卡会提示库存不足。
+    MedicineMissing bool   `json:"medicine_missing"`
     PlanTitle       string     `json:"plan_title"`
     Type            string     `json:"type"`
     DoseAmount      float64    `json:"dose_amount"`
@@ -143,7 +148,10 @@ func parsePlanFrequency(plan Plan) FrequencyDTO {
 
 func planToDTO(db *gorm.DB, plan Plan) PlanDTO {
     var medicine Medicine
-    _ = db.Where("id = ? AND book_id = ?", plan.MedicineID, plan.BookID).First(&medicine).Error
+    medicineMissing := true
+    if err := db.Where("id = ? AND book_id = ?", plan.MedicineID, plan.BookID).First(&medicine).Error; err == nil && medicine.ArchivedAt == nil {
+        medicineMissing = false
+    }
     var completed, total int64
     db.Model(&DoseEvent{}).Where("plan_id = ? AND book_id = ?", plan.ID, plan.BookID).Count(&total)
     db.Model(&DoseEvent{}).Where("plan_id = ? AND book_id = ? AND status = ?", plan.ID, plan.BookID, EventDone).Count(&completed)
@@ -159,7 +167,7 @@ func planToDTO(db *gorm.DB, plan Plan) PlanDTO {
         nextAt = &t
     }
     return PlanDTO{
-        ID: plan.ID, BookID: plan.BookID, MedicineID: plan.MedicineID, MedicineName: medicine.Name,
+        ID: plan.ID, BookID: plan.BookID, MedicineID: plan.MedicineID, MedicineName: medicine.Name, MedicineMissing: medicineMissing,
         LocationID: plan.LocationID, LocationName: plan.LocationName, Address: plan.Address,
         Title: plan.Title, Type: plan.Type, DoseAmount: plan.DoseAmount, DoseUnit: plan.DoseUnit,
         Frequency: parsePlanFrequency(plan), StartDate: plan.StartDate, EndDate: plan.EndDate,
@@ -675,6 +683,27 @@ func autoCompletePlan(db *gorm.DB, planID uint) {
 // repairMissingPlanEvents 修复「计划建了但一条事件都没有」的历史数据：
 // 早期版本对开始日期在过去的新计划会跳过所有过去时间点，导致那些日子在今日/计划页看不到安排。
 // 这里对「进行中且开始日期已到、却零事件」的计划补生成一次（插入用 OnConflict DoNothing，幂等）。
+// repairStalePlanEvents 清掉「计划已结束/已归档，但今天及以后还挂着待用药」的历史遗留事件。
+// 这些条目在今日页会显示成待用药甚至超时，实际计划早就停了。
+func repairStalePlanEvents(db *gorm.DB, bookID uint) {
+    book, err := getBook(db, bookID)
+    if err != nil {
+        return
+    }
+    _ = book
+    // 计划已不在进行中：它名下所有未完成事件都不该再挂着（历史已打卡的保留）。
+    var stale []DoseEvent
+    db.Model(&DoseEvent{}).
+        Joins("JOIN plans ON plans.id = dose_events.plan_id").
+        Where("dose_events.book_id = ? AND dose_events.status = ? AND plans.status <> ?",
+            bookID, EventPending, PlanActive).
+        Find(&stale)
+    for _, ev := range stale {
+        cancelEventJobs(db, ev.ID)
+        db.Delete(&DoseEvent{}, ev.ID)
+    }
+}
+
 func repairMissingPlanEvents(db *gorm.DB) {
     var plans []Plan
     if err := db.Where("status = ?", PlanActive).Find(&plans).Error; err != nil {
@@ -721,6 +750,10 @@ func handleListPlans(db *gorm.DB) gin.HandlerFunc {
         q := db.Model(&Plan{}).Where("book_id = ?", contextBookID(c))
         if s := c.Query("status"); s != "" {
             q = q.Where("status = ?", s)
+        } else if c.Query("include_archived") != "true" {
+            // 删除计划是软删除（status=archived）：默认不返回，否则药品详情里
+            // 会一直挂着「已归档」的计划，看起来像删除没生效。
+            q = q.Where("status <> ?", PlanArchived)
         }
         if m := c.Query("medicine_id"); m != "" {
             q = q.Where("medicine_id = ?", m)
@@ -811,6 +844,36 @@ func handleGetPlan(db *gorm.DB) gin.HandlerFunc {
     }
 }
 
+// startOfToday 返回指定时区「今天 00:00」对应的 UTC 时间，用于「从今天起重新生成」。
+func startOfToday(tz string) time.Time {
+    loc := loadLocation(tz)
+    now := nowUTC().In(loc)
+    return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC()
+}
+
+// deleteStalePendingEvents 在计划改动后清理「已过时」的待用药事件。
+//
+// 规则（用户 2026-11-23 明确：历史已完成的保留，未完成的按最新计划更新）：
+//   - 已打卡（完成/漏服/跳过）的历史事件：一律保留，不动；
+//   - 未完成（待用药）事件：全部清掉，随后由生成逻辑按新计划重新铺一遍
+//     （过去的也会补，最多往前 30 天）。
+//
+// 这样改了用药时间、频率、剂量或起止日期后，今日页与计划页都只反映最新计划，
+// 不会留下旧时间点、旧剂量、旧药品的残留条目。
+func deleteStalePendingEvents(tx *gorm.DB, plan Plan) error {
+    var events []DoseEvent
+    if err := tx.Where("plan_id = ? AND status = ?", plan.ID, EventPending).Find(&events).Error; err != nil {
+        return err
+    }
+    for _, ev := range events {
+        cancelEventJobs(tx, ev.ID)
+        if err := tx.Delete(&DoseEvent{}, ev.ID).Error; err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
 func deleteFuturePendingEvents(tx *gorm.DB, planID uint, after time.Time) error {
     var events []DoseEvent
     tx.Where("plan_id = ? AND status = ? AND scheduled_at > ?", planID, EventPending, after).Find(&events)
@@ -852,10 +915,13 @@ func handleUpdatePlan(db *gorm.DB) gin.HandlerFunc {
             if err := tx.Save(&plan).Error; err != nil {
                 return err
             }
-            if err := deleteFuturePendingEvents(tx, plan.ID, nowUTC()); err != nil {
+            // 先清掉所有未完成事件（历史已打卡的保留），再按新计划从「今天」往后重铺。
+            // 不从开始日期回补：改计划不该在过去的日期上凭空造出一批没吃过的待用药，
+            // 那会让历史页面显示一堆本不存在的「超时」。
+            if err := deleteStalePendingEvents(tx, plan); err != nil {
                 return err
             }
-            n, err := generateForPlanRange(tx, plan)
+            n, err := generateForPlanRangeFrom(tx, plan, startOfToday(plan.Timezone))
             created = n
             return err
         })
@@ -886,10 +952,13 @@ func handlePlanStatus(db *gorm.DB, status string) gin.HandlerFunc {
             if err := tx.Save(&plan).Error; err != nil {
                 return err
             }
-            if status != PlanActive {
-                return deleteFuturePendingEvents(tx, plan.ID, nowUTC())
+            if err := deleteStalePendingEvents(tx, plan); err != nil {
+                return err
             }
-            _, err := generateForPlanRangeFrom(tx, plan, nowUTC())
+            if status != PlanActive {
+                return nil
+            }
+            _, err := generateForPlanRangeFrom(tx, plan, startOfToday(plan.Timezone))
             return err
         })
         if err != nil {
@@ -919,7 +988,8 @@ func handleDeletePlan(db *gorm.DB) gin.HandlerFunc {
             if err := tx.Save(&plan).Error; err != nil {
                 return err
             }
-            return deleteFuturePendingEvents(tx, plan.ID, nowUTC())
+            // 删除后这个计划不该再出现在今日页：连今天已过点的待用药一起清掉。
+            return deleteStalePendingEvents(tx, plan)
         })
         if err != nil {
             response.ErrorInternal(c, "删除计划失败")
@@ -927,6 +997,94 @@ func handleDeletePlan(db *gorm.DB) gin.HandlerFunc {
         }
         audit.Log(db, c, "medcare_plan_delete", "plan", plan.ID, plan.Title)
         response.Success(c, gin.H{"deleted": true})
+    }
+}
+
+// archivedMedicineIDs 返回这个用药本里已归档（删除）的药品 ID 集合。
+func archivedMedicineIDs(db *gorm.DB, bookID uint) map[uint]bool {
+    var ids []uint
+    db.Model(&Medicine{}).Where("book_id = ? AND archived_at IS NOT NULL", bookID).Pluck("id", &ids)
+    set := make(map[uint]bool, len(ids))
+    for _, id := range ids {
+        set[id] = true
+    }
+    return set
+}
+
+// markEventsMedicineMissing 给事件列表补上「药品已删除」标记。
+func markEventsMedicineMissing(db *gorm.DB, bookID uint, dtos []DoseEventDTO) {
+    if len(dtos) == 0 {
+        return
+    }
+    archived := archivedMedicineIDs(db, bookID)
+    for i := range dtos {
+        dtos[i].MedicineMissing = archived[dtos[i].MedicineID]
+    }
+}
+
+// repairOrphanEventMedicines 修复历史遗留：药品被删除后，同计划的待用药事件还挂在旧药品上，
+// 而计划本身已经改到现有药品。这里把这类「待用药 + 药品已归档」的事件，
+// 按计划当前的药品重新对齐（只动待用药事件，历史完成/漏服/跳过的不动）。
+func repairOrphanEventMedicines(db *gorm.DB, bookID uint) {
+    archived := archivedMedicineIDs(db, bookID)
+    if len(archived) == 0 {
+        return
+    }
+    var events []DoseEvent
+    db.Where("book_id = ? AND status = ?", bookID, EventPending).Find(&events)
+    if len(events) == 0 {
+        return
+    }
+    planMed := map[uint]Medicine{}
+    planIDs := make([]uint, 0, len(events))
+    seen := map[uint]bool{}
+    for _, ev := range events {
+        if archived[ev.MedicineID] && !seen[ev.PlanID] {
+            seen[ev.PlanID] = true
+            planIDs = append(planIDs, ev.PlanID)
+        }
+    }
+    if len(planIDs) == 0 {
+        return
+    }
+    var plans []Plan
+    db.Where("book_id = ? AND id IN ?", bookID, planIDs).Find(&plans)
+    validMedIDs := make([]uint, 0, len(plans))
+    for _, p := range plans {
+        if p.MedicineID != 0 && !archived[p.MedicineID] {
+            validMedIDs = append(validMedIDs, p.MedicineID)
+        }
+    }
+    if len(validMedIDs) == 0 {
+        return
+    }
+    var meds []Medicine
+    db.Where("book_id = ? AND id IN ?", bookID, validMedIDs).Find(&meds)
+    for _, m := range meds {
+        planMed[m.ID] = m
+    }
+    planByID := map[uint]Plan{}
+    for _, p := range plans {
+        planByID[p.ID] = p
+    }
+    for _, ev := range events {
+        if !archived[ev.MedicineID] {
+            continue
+        }
+        p, ok := planByID[ev.PlanID]
+        if !ok {
+            continue
+        }
+        m, ok := planMed[p.MedicineID]
+        if !ok {
+            continue
+        }
+        db.Model(&DoseEvent{}).Where("id = ?", ev.ID).Updates(map[string]interface{}{
+            "medicine_id":   m.ID,
+            "medicine_name": m.Name,
+            "type":          m.Category,
+            "dose_unit":     firstNonEmpty(ev.DoseUnit, m.Unit),
+        })
     }
 }
 
@@ -940,6 +1098,10 @@ func handleListEvents(db *gorm.DB) gin.HandlerFunc {
         // 「计划页 → 按时间」直接查事件：这里也补一次零事件的计划，
         // 否则没先打开计划列表的入口会看不到刚补录的历史安排。
         repairMissingPlanEvents(db)
+        // 药品删掉后遗留在旧药品上的待用药事件，先按计划现有药品对齐，
+        // 否则计划页还会列出「已删除药品」的条目、打卡报库存不足。
+        repairOrphanEventMedicines(db, contextBookID(c))
+        repairStalePlanEvents(db, contextBookID(c))
         q := db.Model(&DoseEvent{}).Where("book_id = ?", contextBookID(c))
         if from := c.Query("from"); from != "" {
             q = q.Where("local_date >= ?", from)
@@ -970,6 +1132,7 @@ func handleListEvents(db *gorm.DB) gin.HandlerFunc {
         for _, ev := range rows {
             items = append(items, eventToDTO(ev))
         }
+        markEventsMedicineMissing(db, contextBookID(c), items)
         response.SuccessPage(c, items, total, page, pageSize)
     }
 }
@@ -1002,6 +1165,9 @@ func handleDashboard(db *gorm.DB) gin.HandlerFunc {
         }
         // 历史遗留的「计划有、事件没有」先补齐，否则过去日期永远看不到安排。
         repairMissingPlanEvents(db)
+        repairOrphanEventMedicines(db, book.ID)
+        // 计划已结束/归档却还留着今天及以后的待用药：先清掉，今日页只显示在用的计划。
+        repairStalePlanEvents(db, book.ID)
         var events []DoseEvent
         db.Where("book_id = ? AND local_date = ?", book.ID, date).Order("scheduled_at ASC").Find(&events)
         groups := []DashboardGroup{
@@ -1030,15 +1196,25 @@ func handleDashboard(db *gorm.DB) gin.HandlerFunc {
                 }
             }
         }
-        // 超时列表必须跟当前查看的日期绑定：看 18 日时不能把 20 日才开始的计划算成「超时」，
-        // 也不能把别的日期的待完成事件混进来。这里只取「这一天 + 今天之前仍待完成」的事件，
-        // 且事件本身必须属于已开始的计划（事件已按计划生成，不会早于计划开始日期）。
+        // 超时列表严格绑定当前查看的日期：默认是哪天就只显示那天的安排，
+        // 过点未完成算「超时」仍归在它原本的计划日期下（用户 2026-11-23 明确要求）。
+        // 之前用 local_date <= date 会把前几天的待完成事件混进今天，导致数量与进度对不上。
         var overdueRows []DoseEvent
-        db.Where("book_id = ? AND status = ? AND local_date <= ? AND scheduled_at < ?", book.ID, EventPending, date, now).
-            Order("scheduled_at ASC").Limit(50).Find(&overdueRows)
+        db.Where("book_id = ? AND status = ? AND local_date = ? AND scheduled_at < ?", book.ID, EventPending, date, now).
+            Order("scheduled_at ASC").Limit(200).Find(&overdueRows)
         overdue := make([]DoseEventDTO, 0, len(overdueRows))
         for _, ev := range overdueRows {
             overdue = append(overdue, eventToDTO(ev))
+        }
+        markEventsMedicineMissing(db, book.ID, overdue)
+        // 所有分组与「下一项」也补上药品缺失标记。
+        for i := range groups {
+            markEventsMedicineMissing(db, book.ID, groups[i].Events)
+        }
+        if next != nil {
+            tmp := []DoseEventDTO{*next}
+            markEventsMedicineMissing(db, book.ID, tmp)
+            next = &tmp[0]
         }
         var member BookMember
         _ = db.Where("book_id = ? AND user_id = ?", book.ID, currentUserID(c)).First(&member).Error
@@ -1048,7 +1224,9 @@ func handleDashboard(db *gorm.DB) gin.HandlerFunc {
         var nextRow DoseEvent
         if err := db.Where("book_id = ? AND status = ? AND scheduled_at > ?", book.ID, EventPending, now).Order("scheduled_at ASC").First(&nextRow).Error; err == nil {
             dto := eventToDTO(nextRow)
-            upcoming = &dto
+            tmp := []DoseEventDTO{dto}
+            markEventsMedicineMissing(db, book.ID, tmp)
+            upcoming = &tmp[0]
         }
         response.Success(c, DashboardDTO{
             Date: date, Book: bookToDTO(db, book, member.Role, currentUserID(c)), Summary: summary, Overdue: overdue,

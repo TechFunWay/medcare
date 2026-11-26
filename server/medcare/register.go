@@ -84,6 +84,7 @@ func setupAuthRoutes(api *gin.RouterGroup, db *gorm.DB) {
 
     g.GET("/channels", handleListChannels(db))
     g.POST("/channels", handleCreateChannel(db))
+    g.GET("/channels/:id/config", handleGetChannelConfig(db))
     g.PUT("/channels/:id", handleUpdateChannel(db))
     g.DELETE("/channels/:id", handleDeleteChannel(db))
     g.POST("/channels/:id/test", handleTestChannel(db))

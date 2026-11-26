@@ -37,6 +37,8 @@ type stockMovementDTO struct {
     MedicineID    uint      `json:"medicine_id"`
     BatchID       *uint     `json:"batch_id,omitempty"`
     MedicineName  string    `json:"medicine_name"`
+    // MedicineMissing 表示这条记录归属的药品已被删除，需要提示用户重新选择。
+    MedicineMissing bool    `json:"medicine_missing"`
     Unit          string    `json:"unit"`
     Type          string    `json:"type"`
     QuantityDelta float64   `json:"quantity_delta"`
@@ -81,7 +83,8 @@ func movementFilterQuery(db *gorm.DB, c *gin.Context, bookID uint) *gorm.DB {
             }
             q = q.Where("medicine_id IN ?", ids)
         }
-        // 时间范围用 RFC3339（前端按北京时间换算成 UTC），按记录创建时间过滤。
+        // 录入时间段：按流水的创建时间（也就是「这条记录是什么时候录的」）过滤。
+        // 时间用 RFC3339（前端按北京时间换算成 UTC）。
         if v := strings.TrimSpace(c.Query("from")); v != "" {
             if t, err := time.Parse(time.RFC3339, v); err == nil {
                 q = q.Where("created_at >= ?", t)
@@ -91,6 +94,29 @@ func movementFilterQuery(db *gorm.DB, c *gin.Context, bookID uint) *gorm.DB {
             if t, err := time.Parse(time.RFC3339, v); err == nil {
                 q = q.Where("created_at <= ?", t)
             }
+        }
+        // 批次时间段：按该条流水所对应批次的入库时间（medicine_batches.received_at）过滤。
+        // 与「录入时间」分开，是为了查「某段时间入的那批药现在怎么用的」。
+        batchFrom := strings.TrimSpace(c.Query("batch_from"))
+        batchTo := strings.TrimSpace(c.Query("batch_to"))
+        if batchFrom != "" || batchTo != "" {
+            bq := db.Model(&MedicineBatch{}).Where("book_id = ?", bookID)
+            if batchFrom != "" {
+                if t, err := time.Parse(time.RFC3339, batchFrom); err == nil {
+                    bq = bq.Where("received_at >= ?", t)
+                }
+            }
+            if batchTo != "" {
+                if t, err := time.Parse(time.RFC3339, batchTo); err == nil {
+                    bq = bq.Where("received_at <= ?", t)
+                }
+            }
+            var batchIDs []uint
+            bq.Pluck("id", &batchIDs)
+            if len(batchIDs) == 0 {
+                return q.Where("1 = 0")
+            }
+            q = q.Where("batch_id IN ?", batchIDs)
         }
     return q
 }
@@ -195,6 +221,13 @@ func handleListBookStockMovements(db *gorm.DB) gin.HandlerFunc {
                 meds[m.ID] = m
             }
         }
+        // 已删除（归档）的药品：记录仍然保留，但要告诉前端「归属药品已不存在」。
+        missing := map[uint]bool{}
+        for _, id := range medIDs {
+            if m, ok := meds[id]; !ok || m.ArchivedAt != nil {
+                missing[id] = true
+            }
+        }
         // 关联事件的时间信息（计划时间 / 完成时间），只查本次页面上出现的 event_id。
         evIDs := make([]uint, 0, len(rows))
         seenEv := map[uint]bool{}
@@ -236,6 +269,7 @@ func handleListBookStockMovements(db *gorm.DB) gin.HandlerFunc {
                 MedicineID:    r.MedicineID,
                 BatchID:       r.BatchID,
                 MedicineName:  m.Name,
+                MedicineMissing: missing[r.MedicineID],
                 Unit:          m.Unit,
                 Type:          r.Type,
                 QuantityDelta: r.QuantityDelta,

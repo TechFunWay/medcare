@@ -1,7 +1,7 @@
 {
   "appname": "techfunway-medcare",
   "display_name": "用药管理",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "desc": "面向用药人与监护人的家庭协作用药本：药品批次库存、用药计划、到点提醒与打卡、处方单 AI 识别、邮件/钉钉/飞书通知与依从性统计",
   "author": "TechFunWay",
   "website": "https://techfunway.wycto.cn",

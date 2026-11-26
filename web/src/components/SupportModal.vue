@@ -20,7 +20,7 @@
       <section class="support-card support-amount" role="dialog" aria-modal="true" aria-label="赞赏金额">
         <div class="sheet-head"><h2>赞赏金额</h2><button class="icon-btn" aria-label="关闭" @click="closeAmount"><AppIcon name="close" :size="18" /></button></div>
         <div class="field"><label>金额（元）</label><input v-model.number="amount" type="number" min="0" step="1" class="input" placeholder="例如：6" /></div>
-        <p class="tiny muted">填写自愿赞赏的金额，点击确定后本版本在所有设备不再提示。</p>
+        <p class="tiny muted">填写自愿赞赏的金额，点击确定后本版本隐藏横幅。</p>
         <div class="sheet-foot"><button class="btn btn-outline btn-block" :disabled="support.sending" @click="closeAmount">取消</button><button class="btn btn-primary btn-block" :disabled="support.sending || amount < 0" @click="confirmAmount">{{ support.sending ? '提交中…' : '确定' }}</button></div>
       </section>
     </div>
@@ -39,7 +39,11 @@ const ui = useUIStore()
 const amountOpen = ref(false)
 const amount = ref(6)
 
-function openAmount() { amount.value = 6; amountOpen.value = true }
+function openAmount() {
+  support.markPermanentSuppressed()
+  amount.value = 6
+  amountOpen.value = true
+}
 function closeAmount() { if (!support.sending) amountOpen.value = false }
 async function confirmAmount() {
   const ok = await support.markSupported(Number(amount.value) || 0)

@@ -20,9 +20,66 @@ log_msg() {
     printf '%s [INFO] %s\n' "${timestamp}" "$1" >> "${log_file}"
 }
 
-start_process() {
-    if status; then
+check_process() {
+    local pid=$1
+    if kill -0 "${pid}" 2>/dev/null; then
         return 0
+    else
+        return 1
+    fi
+}
+
+# 只看进程在不在（不等就绪），给 wait_ready 内部用，避免和 status 互相递归。
+process_alive() {
+    if [ -f "${PID_FILE}" ]; then
+        local pid
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if [ -n "${pid}" ] && check_process "${pid}"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 就绪探测：健康检查接口通，或统一网关 socket 已建好，才算真的能打开。
+# -fnos-app 模式下接口挂在网关前缀下，所以两条路径都试。
+probe_ready() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/app/techfunway-medcare/api/health" >/dev/null 2>&1 && return 0
+        curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1 && return 0
+    fi
+    if [ -S "${APP_DIR}/app.sock" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# 启动后阻塞等待就绪（最多 ${1} 秒）。
+# 以前 start 起完进程就立刻返回 0，飞牛应用中心马上出现「打开」按钮，
+# 但这时服务还没监听端口、网关 socket 还没建好，点开就是 Bad Gateway。
+wait_ready() {
+    local limit="${1:-60}" count=0
+    while [ "${count}" -lt "${limit}" ]; do
+        if ! process_alive; then
+            log_msg "process exited before becoming ready"
+            return 1
+        fi
+        if probe_ready; then
+            log_msg "用药管理 is ready after ${count}s"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    log_msg "用药管理 did not become ready within ${limit}s"
+    return 1
+}
+
+start_process() {
+    if process_alive; then
+        # 进程在跑但可能还没就绪（比如刚被拉起），同样等它真正可用再返回。
+        wait_ready 20
+        return $?
     fi
 
     mkdir -p "${DATA_DIR}/db" "${DATA_DIR}/uploads" "${DATA_DIR}/logs"
@@ -48,9 +105,14 @@ start_process() {
         -gateway-socket "${APP_DIR}/app.sock" \
         -logmode release "${extra_args[@]}" >> /dev/null 2>&1 &
 
-    printf "%s" "$!" > ${PID_FILE}
+    printf "%s" "$!" > "${PID_FILE}"
     log_msg "用药管理 started with pid $!"
-    return 0
+
+    if wait_ready 30; then
+        return 0
+    fi
+    echo "用药管理启动超时：服务未在 30 秒内就绪，请查看数据目录下的日志。" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    return 1
 }
 
 stop_process() {
@@ -63,14 +125,14 @@ stop_process() {
         if ! check_process "${pid}"; then
             rm -f "${PID_FILE}"
             log_msg "process not running, removed pid file"
-            return
+            return 0
         fi
 
         log_msg "send TERM signal to PID:${pid}..."
         kill -TERM "${pid}" >/dev/null 2>&1
 
         local count=0
-        while check_process "${pid}" && [ $count -lt 10 ]; do
+        while check_process "${pid}" && [ ${count} -lt 10 ]; do
             sleep 1
             count=$((count + 1))
             log_msg "waiting process terminate... (${count}s/10s)"
@@ -89,25 +151,14 @@ stop_process() {
     return 0
 }
 
-check_process() {
-    local pid=$1
-    if kill -0 "${pid}" 2>/dev/null; then
-        return 0
-    else
+# status 同时要求「进程在」与「服务真的就绪」：
+# 飞牛应用中心据此判断要不要显示「打开」，只回进程存在会让按钮过早出现。
+status() {
+    if ! process_alive; then
+        rm -f "${PID_FILE}"
         return 1
     fi
-}
-
-status() {
-    if [ -f "${PID_FILE}" ]; then
-        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
-        if check_process "${pid}"; then
-            return 0
-        else
-            rm -f "${PID_FILE}"
-        fi
-    fi
-    return 1
+    probe_ready
 }
 
 case $1 in

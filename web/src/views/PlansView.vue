@@ -14,7 +14,29 @@
     </div>
 
     <div class="chip-row type-row">
-      <button v-for="t in typeFilters" :key="t.value" type="button" class="chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">{{ t.label }}</button>
+      <button v-for="t in typeFilters" :key="t.value" type="button" class="chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">
+        {{ t.label }}<b class="chip-count">{{ typeCounts[t.value] || 0 }}</b>
+      </button>
+    </div>
+
+    <!-- 药名模糊搜索：按时间（按天/按月）与按药名两种视图共用同一个关键词 -->
+    <div class="card plan-search">
+      <AppIcon name="search" :size="19" class="ps-icon" />
+      <input v-model="medQuery" class="input ps-input" placeholder="搜索药品名 / 计划标题" />
+      <button v-if="medQuery" class="ps-clear" aria-label="清空搜索" @click="medQuery = ''"><AppIcon name="close" :size="16" /></button>
+    </div>
+
+    <!-- 药品已被删除的计划：计划还在但库存为 0，打卡会提示库存不足，这里提前提醒去改 -->
+    <div v-if="missingPlans.length" class="card missing-banner">
+      <div class="small" style="color:var(--mc-danger);font-weight:700">有 {{ missingPlans.length }} 个计划的药品已被删除</div>
+      <p class="tiny muted" style="margin-top:4px;line-height:1.6">这些计划打卡时会因库存为 0 提示库存不足。点下面的计划，把「药品」改成现有的药品即可恢复。</p>
+      <div class="missing-list">
+        <button v-for="p in missingPlans" :key="p.id" type="button" class="missing-item" @click="router.push('/plans/' + p.id)">
+          <span class="missing-name">{{ p.title || p.medicine_name || '未命名计划' }}</span>
+          <span class="tiny muted">{{ p.medicine_name || '药品已删除' }} · 点此修改</span>
+          <AppIcon name="chevron" :size="16" />
+        </button>
+      </div>
     </div>
 
     <!-- ============ 按时间 ============ -->
@@ -53,16 +75,17 @@
       <template v-else-if="timeView === 'day'">
         <div v-if="!filteredDayEvents.length" class="empty card">
           <div class="empty-icon"><AppIcon name="calendar" :size="28" /></div>
-          <h3>{{ typeFilter ? '该分类下这天没有安排' : '这天没有安排' }}</h3>
-          <p>可以前后翻一天，或到「按月」看看整月的计划。</p>
+          <h3>{{ (typeFilter || medQuery) ? '没有符合条件的安排' : '这天没有安排' }}</h3>
+          <p>{{ medQuery ? '换个药名关键词试试，或清空搜索。' : '可以前后翻一天，或到「按月」看看整月的计划。' }}</p>
         </div>
         <div v-else class="list">
           <div v-for="ev in filteredDayEvents" :key="ev.id" class="card event-card" @click="router.push('/plans/' + ev.plan_id)">
             <div class="event-time"><b>{{ ev.local_time }}</b><span>{{ eventStatus(ev.status) }}</span></div>
             <div class="event-main">
-              <div class="event-title"><b>{{ ev.medicine_name }}</b><span class="badge" :class="eventBadge(ev.status)">{{ eventStatus(ev.status) }}</span></div>
+              <div class="event-title"><b>{{ ev.medicine_name || '药品已删除' }}</b><span v-if="ev.medicine_missing" class="badge missed">药品已删除</span><span class="badge" :class="eventBadge(ev.status)">{{ eventStatus(ev.status) }}</span></div>
               <div class="tiny muted">{{ ev.plan_title || '用药计划' }} · {{ ev.dose_amount }} {{ ev.dose_unit }}<span v-if="ev.location_name"> · {{ ev.location_name }}</span></div>
               <div v-if="ev.executor_name" class="tiny muted">{{ ev.executor_name }}</div>
+              <div v-if="ev.medicine_missing" class="tiny" style="color:var(--mc-danger)">关联药品已被删除，点进计划改成现有药品，否则会提示库存不足</div>
             </div>
             <AppIcon name="chevron" :size="16" class="event-chevron" />
           </div>
@@ -85,8 +108,8 @@
           <p class="tiny muted" style="margin-top:10px">点某天可切到按天查看；圆点表示当天有未完成/漏服/已完成安排。</p>
         </div>
 
-        <div class="section-head" style="margin-top:16px"><h2>本月安排</h2><span class="tiny muted">共 {{ typeFilter ? filteredMonthEvents.length : monthTotal }} 项</span></div>
-        <div v-if="!monthGroups.length" class="empty card"><div class="empty-icon"><AppIcon name="calendar" :size="28" /></div><h3>这个月还没有安排</h3><p>切换月份或先新建计划。</p></div>
+        <div class="section-head" style="margin-top:16px"><h2>本月安排</h2><span class="tiny muted">共 {{ (typeFilter || medQuery) ? filteredMonthEvents.length : monthTotal }} 项</span></div>
+        <div v-if="!monthGroups.length" class="empty card"><div class="empty-icon"><AppIcon name="calendar" :size="28" /></div><h3>{{ medQuery ? '没有匹配「' + medQuery + '」的安排' : '这个月还没有安排' }}</h3><p>{{ medQuery ? '换个关键词，或清空搜索看全部。' : '切换月份或先新建计划。' }}</p></div>
         <div v-else class="list">
           <div v-for="group in monthGroups" :key="group.date" class="card month-group">
             <button type="button" class="month-group-head" @click="setDay(group.date)">
@@ -107,13 +130,9 @@
     <!-- ============ 按药名 ============ -->
     <template v-else>
       <div class="tabs" style="margin-bottom:10px">
-        <button v-for="t in tabs" :key="t.value" class="tab" :class="{ active: status === t.value }" @click="status = t.value; loadPlans()">{{ t.label }}</button>
-      </div>
-
-      <div class="card plan-search">
-        <AppIcon name="search" :size="19" class="ps-icon" />
-        <input v-model="medQuery" class="input ps-input" placeholder="搜索药品名" />
-        <button v-if="medQuery" class="ps-clear" aria-label="清空搜索" @click="medQuery = ''"><AppIcon name="close" :size="16" /></button>
+        <button v-for="t in tabs" :key="t.value" class="tab" :class="{ active: status === t.value }" @click="status = t.value; loadPlans()">
+          {{ t.label }}<b class="tab-count">{{ statusCounts[t.value] || 0 }}</b>
+        </button>
       </div>
 
       <div v-if="planLoading" class="card muted">加载中…</div>
@@ -142,8 +161,9 @@
             <div class="plan-main">
               <div class="type-dot" :class="p.type"><AppIcon :name="p.type === 'infusion' ? 'location' : 'pill'" :size="18" /></div>
               <div class="plan-body">
-                <div class="plan-title-row"><b>{{ p.title || p.medicine_name }}</b><span class="badge" :class="p.status === 'active' || p.status === 'completed' ? 'done' : 'pending'">{{ statusLabel(p.status) }}</span>
+                <div class="plan-title-row"><b>{{ p.title || p.medicine_name || '药品已删除' }}</b><span v-if="p.medicine_missing" class="badge missed">药品已删除</span><span class="badge" :class="p.status === 'active' || p.status === 'completed' ? 'done' : 'pending'">{{ statusLabel(p.status) }}</span>
                   <span v-if="p.status === 'active' && p.today_total > 0 && p.today_done >= p.today_total" class="badge done">今日已完成</span></div>
+                <div v-if="p.medicine_missing" class="tiny" style="color:var(--mc-danger);margin-top:2px">关联药品已被删除，点进来改成现有药品，否则会提示库存不足</div>
                 <div class="muted small" style="margin-top:2px">{{ p.dose_amount }} {{ p.dose_unit }} · {{ frequencyLabel(p) }}</div>
                 <div class="tiny muted" style="margin-top:3px">{{ p.start_date }}{{ p.end_date ? ' 至 ' + p.end_date : ' 起' }}<span v-if="p.location_name"> · {{ p.location_name }}</span></div>
                 <div class="progress-track" style="margin-top:8px"><span :style="{ width: p.total_count ? Math.round(p.completed_count / p.total_count * 100) + '%' : '0%' }" /></div>
@@ -199,11 +219,50 @@ const typeFilters = [
   { value: 'topical', label: '外用' },
   { value: 'other', label: '其他' },
 ]
+const medQuery = ref('')
 function matchesType(t?: string) { return !typeFilter.value || (t || 'other') === typeFilter.value }
-const filteredDayEvents = computed(() => dayEvents.value.filter((ev) => matchesType(ev.type)))
-const filteredMonthEvents = computed(() => monthEvents.value.filter((ev) => matchesType(ev.type)))
+// 药名模糊搜索：药品名或计划标题命中即可（按时间视图也用同一关键词）。
+function matchesQuery(ev: DoseEvent) {
+  const q = medQuery.value.trim().toLowerCase()
+  if (!q) return true
+  return ((ev.medicine_name || '') + ' ' + (ev.plan_title || '')).toLowerCase().includes(q)
+}
+const filteredDayEvents = computed(() => dayEvents.value.filter((ev) => matchesType(ev.type) && matchesQuery(ev)))
+const filteredMonthEvents = computed(() => monthEvents.value.filter((ev) => matchesType(ev.type) && matchesQuery(ev)))
 
-const plans = ref<Plan[]>([])
+const allPlans = ref<Plan[]>([])
+// 当前状态筛选后的计划（分类筛选在 medicineGroups 里再筛一次）
+const plans = computed(() => allPlans.value.filter((p) => !status.value || p.status === status.value))
+// 药品已被删除的计划：顶部提醒 + 「按时间」事件卡徽标都用它
+const missingPlans = computed(() => allPlans.value.filter((p) => p.medicine_missing))
+// 分类数量：按「当前状态」统计各类有多少个计划
+// 计划是否命中当前药名搜索（药品名或计划标题）
+function matchesPlanQuery(p: Plan) {
+  const q = medQuery.value.trim().toLowerCase()
+  if (!q) return true
+  return ((p.medicine_name || '') + ' ' + (p.title || '')).toLowerCase().includes(q)
+}
+const typeCounts = computed<Record<string, number>>(() => {
+  const c: Record<string, number> = { '': 0, oral: 0, injection: 0, infusion: 0, topical: 0, other: 0 }
+  for (const p of plans.value) {
+    if (!matchesPlanQuery(p)) continue
+    c[''] = (c[''] || 0) + 1
+    const t = p.type || 'other'
+    c[t] = (c[t] || 0) + 1
+  }
+  return c
+})
+// 状态数量：按「当前分类」统计各状态有多少个计划
+const statusCounts = computed<Record<string, number>>(() => {
+  const c: Record<string, number> = { '': 0, active: 0, paused: 0, completed: 0, ended: 0 }
+  for (const p of allPlans.value) {
+    if (typeFilter.value && (p.type || 'other') !== typeFilter.value) continue
+    if (!matchesPlanQuery(p)) continue
+    c[''] = (c[''] || 0) + 1
+    c[p.status] = (c[p.status] || 0) + 1
+  }
+  return c
+})
 const planLoading = ref(true)
 const status = ref('active')
 const tabs = [{ value: '', label: '全部' }, { value: 'active', label: '进行中' }, { value: 'paused', label: '已暂停' }, { value: 'completed', label: '已完成' }, { value: 'ended', label: '已结束' }]
@@ -230,17 +289,12 @@ const monthGroups = computed(() => {
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, events]) => ({ date, events }))
 })
 
-const medQuery = ref('')
 const medicineGroups = computed(() => {
   const map = new Map<string, { key: string; name: string; plans: Plan[]; nextText: string }>()
-  const q = medQuery.value.trim().toLowerCase()
   for (const p of plans.value) {
     if (!matchesType(p.type)) continue
     // 按药名视图支持搜索：药品名或计划标题命中即保留该计划。
-    if (q) {
-      const hay = ((p.medicine_name || '') + ' ' + (p.title || '')).toLowerCase()
-      if (!hay.includes(q)) continue
-    }
+    if (!matchesPlanQuery(p)) continue
     const key = String(p.medicine_id || p.medicine_name)
     if (!map.has(key)) map.set(key, { key, name: p.medicine_name, plans: [], nextText: '' })
     map.get(key)!.plans.push(p)
@@ -306,14 +360,15 @@ async function loadMonth() {
   } catch (e: any) { ui.showToast(e?.response?.data?.message || '读取本月安排失败', 'error') }
   finally { timeLoading.value = false }
 }
+// 计划列表一次取全（不按状态过滤），状态与分类的统计都从这份全量数据算，
+// 切换 chip 只是前端筛选，不用再请求接口，也不会出现「统计数与列表对不上」。
 async function loadPlans() {
   if (!book.currentId) return
-  if (!book.canPlanView) { plans.value = []; return }
+  if (!book.canPlanView) { allPlans.value = []; return }
   planLoading.value = true
   try {
-    // 计划超过一页时逐页取全，避免列表与统计缺项
-    plans.value = await fetchAllPages<Plan>(async (page, pageSize) => {
-      const res = await planApi.list(book.currentId!, { status: status.value, page, pageSize })
+    allPlans.value = await fetchAllPages<Plan>(async (page, pageSize) => {
+      const res = await planApi.list(book.currentId!, { page, pageSize })
       return { items: (res.data?.data?.items || []) as Plan[], total: Number(res.data?.data?.total) || 0 }
     })
   }
@@ -332,6 +387,14 @@ watch(() => book.currentId, () => { loadDay(); loadPlans() })
 .head-actions { display: flex; gap: 8px; flex: 0 0 auto; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .empty-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
 .type-row { margin-bottom: 10px; }
+.missing-banner { border-color: var(--mc-danger); margin-bottom: 10px; }
+.missing-list { display: grid; gap: 6px; margin-top: 8px; }
+.missing-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--mc-border); background: var(--mc-surface-2); }
+.missing-item .missing-name { font-weight: 700; font-size: 13.5px; }
+.missing-item .tiny { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* chip / tab 上的数量徽标 */
+.chip-count, .tab-count { display: inline-block; min-width: 16px; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--mc-surface-2); color: var(--mc-text); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
+.chip.active .chip-count, .tab.active .tab-count { background: var(--mc-primary); color: #fff; }
 .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--mc-surface-2); border: 1px solid var(--mc-border); border-radius: 12px; margin-bottom: 12px; }
 .mode-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; border: 0; background: transparent; color: var(--mc-text-muted); padding: 6px 10px; border-radius: 9px; font-weight: 700; cursor: pointer; }
 .mode-btn.active { background: var(--mc-surface); color: var(--mc-primary-strong); box-shadow: 0 1px 4px rgba(20,40,30,.08); }

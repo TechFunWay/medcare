@@ -24,8 +24,9 @@ type ChannelDTO struct {
     LastTestedAt  *time.Time `json:"last_tested_at,omitempty"`
     LastErrorCode string     `json:"last_error_code,omitempty"`
     LastErrorAt   *time.Time `json:"last_error_at,omitempty"`
-    // KeywordSet 表示这个机器人渠道还配着旧的「自定义关键词」——应用已不再在消息里补前缀，
-    // 需要用户改用加签或 IP 白名单，否则机器人会拒收。
+    // Keyword 是机器人「自定义关键词」校验用的词（不是机密，可回显）；
+    // 应用会把它随消息发出以满足校验，但不会显示在通知正文里。
+    Keyword    string    `json:"keyword,omitempty"`
     KeywordSet bool      `json:"keyword_set,omitempty"`
     CreatedAt  time.Time `json:"created_at"`
 }
@@ -48,8 +49,76 @@ type emailChannelConfig struct {
     Address string `json:"address"`
 }
 
+// handleGetChannelConfig 返回渠道的可编辑配置（仅本人）。
+// Webhook 与收件地址不是密钥，回填后用户才能在编辑时看到并修正；
+// 加签密钥仍然不回传，编辑时留空表示不修改。
+func handleGetChannelConfig(db *gorm.DB) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        id, ok := parseUintParam(c, "id")
+        if !ok {
+            return
+        }
+        var ch NotificationChannel
+        if err := db.Where("id = ? AND user_id = ?", id, currentUserID(c)).First(&ch).Error; err != nil {
+            response.ErrorNotFound(c, "通知渠道不存在")
+            return
+        }
+        out := gin.H{"type": ch.Type, "name": ch.Name, "enabled": ch.Enabled}
+        plain, err := decryptString(db, ch.ConfigEncrypted)
+        if err == nil {
+            switch ch.Type {
+            case ChannelDingTalk, ChannelFeishu:
+                var cfg struct {
+                    Webhook string `json:"webhook"`
+                    Keyword string `json:"keyword"`
+                }
+                if json.Unmarshal([]byte(plain), &cfg) == nil {
+                    out["webhook"] = cfg.Webhook
+                    out["keyword"] = cfg.Keyword
+                }
+            case ChannelEmail:
+                var cfg emailChannelConfig
+                if json.Unmarshal([]byte(plain), &cfg) == nil {
+                    out["address"] = cfg.Address
+                }
+            }
+        }
+        response.Success(c, out)
+    }
+}
+
 func channelToDTO(ch NotificationChannel) ChannelDTO {
     return ChannelDTO{ID: ch.ID, Type: ch.Type, Name: ch.Name, Enabled: ch.Enabled, Status: ch.Status, TargetMasked: ch.TargetMasked, LastTestedAt: ch.LastTestedAt, LastErrorCode: ch.LastErrorCode, LastErrorAt: ch.LastErrorAt, CreatedAt: ch.CreatedAt}
+}
+
+// mergeChannelConfig 把「编辑时提交的部分字段」合并到已保存的配置上。
+// 前端不回显 Webhook 与密钥（接口只给掩码），所以编辑时这两项留空表示保持原值；
+// 邮箱地址同理：留空就沿用旧地址。
+func mergeChannelConfig(db *gorm.DB, ch NotificationChannel, incoming json.RawMessage) (json.RawMessage, error) {
+    plain, err := decryptString(db, ch.ConfigEncrypted)
+    if err != nil {
+        return incoming, nil
+    }
+    var oldMap, newMap map[string]interface{}
+    if json.Unmarshal([]byte(plain), &oldMap) != nil {
+        return incoming, nil
+    }
+    if json.Unmarshal(incoming, &newMap) != nil {
+        return nil, errors.New("渠道配置无效")
+    }
+    for k, v := range newMap {
+        s, isStr := v.(string)
+        // 空字符串视为「不修改」，保留旧值；非字符串（如布尔）照常覆盖。
+        if isStr && strings.TrimSpace(s) == "" {
+            continue
+        }
+        oldMap[k] = v
+    }
+    merged, err := json.Marshal(oldMap)
+    if err != nil {
+        return nil, errors.New("渠道配置无效")
+    }
+    return merged, nil
 }
 
 func validateChannelConfig(channelType string, raw json.RawMessage) (interface{}, string, error) {
@@ -139,6 +208,7 @@ func handleListChannels(db *gorm.DB) gin.HandlerFunc {
                 }
                 if plain, err := decryptString(db, ch.ConfigEncrypted); err == nil {
                     if json.Unmarshal([]byte(plain), &cfg) == nil && strings.TrimSpace(cfg.Keyword) != "" {
+                        dto.Keyword = strings.TrimSpace(cfg.Keyword)
                         dto.KeywordSet = true
                     }
                 }
@@ -222,7 +292,14 @@ func handleUpdateChannel(db *gorm.DB) gin.HandlerFunc {
             ch.Enabled = *in.Enabled
         }
         if len(in.Config) > 0 {
-            normalized, masked, err := validateChannelConfig(ch.Type, in.Config)
+            // 编辑时允许只提交部分字段（例如只改加签密钥、不动 Webhook）：
+            // 先解出旧配置，用新提交里的非空字段覆盖，再整体校验与加密。
+            merged, err := mergeChannelConfig(db, ch, in.Config)
+            if err != nil {
+                response.ErrorBadRequest(c, err.Error())
+                return
+            }
+            normalized, masked, err := validateChannelConfig(ch.Type, merged)
             if err != nil {
                 response.ErrorBadRequest(c, err.Error())
                 return

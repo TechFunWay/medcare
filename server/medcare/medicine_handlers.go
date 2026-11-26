@@ -1315,6 +1315,10 @@ type BatchDTO struct {
     Channel   string `json:"channel"`
     Editable  bool   `json:"editable"`
     EditUntil string `json:"edit_until,omitempty"`
+    // MedicineName 是这条入库记录当前归属的药品名；
+    // MedicineMissing 为 true 表示该药品已被删除（归档），需要用户重新选择归属。
+    MedicineName    string `json:"medicine_name"`
+    MedicineMissing bool   `json:"medicine_missing"`
 }
 
 // batchEditWindow 是入库记录允许修改的时间窗。
@@ -1341,14 +1345,45 @@ func buildBatchDTOs(db *gorm.DB, bookID uint, rows []MedicineBatch) []BatchDTO {
             mvByBatch[*mv.BatchID] = mv
         }
     }
+    // 一次把涉及的药品查出来（含已归档的），用于显示归属与判断是否还存在。
+    medIDs := make([]uint, 0, len(rows))
+    seenMed := map[uint]bool{}
+    for _, b := range rows {
+        if !seenMed[b.MedicineID] {
+            seenMed[b.MedicineID] = true
+            medIDs = append(medIDs, b.MedicineID)
+        }
+    }
+    type medBrief struct {
+        ID         uint
+        Name       string
+        ArchivedAt *time.Time
+    }
+    var medRows []medBrief
+    medByID := map[uint]medBrief{}
+    if len(medIDs) > 0 {
+        db.Model(&Medicine{}).Select("id, name, archived_at").Where("book_id = ? AND id IN ?", bookID, medIDs).Scan(&medRows)
+        for _, m := range medRows {
+            medByID[m.ID] = m
+        }
+    }
     now := nowUTC()
     for _, b := range rows {
         dto := BatchDTO{MedicineBatch: b}
+        if m, ok := medByID[b.MedicineID]; ok {
+            dto.MedicineName = m.Name
+            dto.MedicineMissing = m.ArchivedAt != nil
+        } else {
+            dto.MedicineMissing = true
+        }
         if mv, ok := mvByBatch[b.ID]; ok {
             dto.Channel = mv.Channel
             if now.Sub(mv.CreatedAt) <= batchEditWindow {
                 dto.Editable = true
                 dto.EditUntil = mv.CreatedAt.Add(batchEditWindow).In(loadLocation(BeijingTimezone)).Format("2006-01-02 15:04")
+            } else if dto.MedicineMissing {
+                // 药品已被删除：允许随时把它改挂到其它药品上，属于数据修复。
+                dto.Editable = true
             }
         }
         out = append(out, dto)
@@ -1408,6 +1443,8 @@ func handleUpdateStockInBatch(db *gorm.DB) gin.HandlerFunc {
             Supplier   string  `json:"supplier"`
             Note       string  `json:"note"`
             Channel    string  `json:"channel"`
+            // MedicineID 非 0 时把这条入库记录改挂到另一个药品上（录错药品时用）。
+            MedicineID uint `json:"medicine_id"`
         }
         if err := c.ShouldBindJSON(&in); err != nil {
             response.ErrorBadRequest(c, "参数无效")
@@ -1429,7 +1466,13 @@ func handleUpdateStockInBatch(db *gorm.DB) gin.HandlerFunc {
             return
         }
         now := nowUTC()
-        if now.Sub(mv.CreatedAt) > batchEditWindow {
+        // 归属药品已被删除时属于数据修复，不受 7 天限制：否则这条库存永远改不回来。
+        var owner Medicine
+        ownerMissing := true
+        if err := db.Where("id = ? AND book_id = ?", b.MedicineID, b.BookID).First(&owner).Error; err == nil {
+            ownerMissing = owner.ArchivedAt != nil
+        }
+        if !ownerMissing && now.Sub(mv.CreatedAt) > batchEditWindow {
             response.ErrorBadRequest(c, "入库已超过 7 天，不能再修改")
             return
         }
@@ -1448,7 +1491,21 @@ func handleUpdateStockInBatch(db *gorm.DB) gin.HandlerFunc {
         if channel == "" {
             channel = StockChannelOther
         }
+        // 改归属药品：新药品必须存在、属于同一个用药本且未被删除。
+        newMedID := b.MedicineID
+        if in.MedicineID > 0 && in.MedicineID != b.MedicineID {
+            var target Medicine
+            if err := db.Where("id = ? AND book_id = ? AND archived_at IS NULL", in.MedicineID, b.BookID).First(&target).Error; err != nil {
+                response.ErrorBadRequest(c, "目标药品不存在或已被删除")
+                return
+            }
+            newMedID = target.ID
+        }
         err := db.Transaction(func(tx *gorm.DB) error {
+            oldMedID := b.MedicineID
+            if newMedID != b.MedicineID {
+                b.MedicineID = newMedID
+            }
             b.QuantityInitial = in.Quantity
             b.QuantityRemaining = in.Quantity - consumed
             b.BatchNo = strings.TrimSpace(in.BatchNo)
@@ -1459,13 +1516,26 @@ func handleUpdateStockInBatch(db *gorm.DB) gin.HandlerFunc {
             if err := tx.Save(&b).Error; err != nil {
                 return err
             }
+            // 归属药品改了，流水也跟着改：这里必须写进 mv 本身，
+            // 否则下面 Save(&mv) 会用旧 medicine_id 把批量更新覆盖回去。
+            mv.MedicineID = b.MedicineID
             mv.QuantityDelta = in.Quantity
             mv.QuantityAfter = in.Quantity
             mv.Channel = channel
             if err := tx.Save(&mv).Error; err != nil {
                 return err
             }
+            // 同一批次可能还有其它流水（比如盘点/丢弃），一并搬走保证归属一致。
+            if oldMedID != b.MedicineID {
+                if err := tx.Model(&StockMovement{}).Where("book_id = ? AND batch_id = ? AND id <> ?", b.BookID, b.ID, mv.ID).Update("medicine_id", b.MedicineID).Error; err != nil {
+                    return err
+                }
+            }
             updateMedicineStock(tx, b.BookID, b.MedicineID)
+            // 换了归属药品时，原药品的库存也要重算，否则旧药还挂着这份库存。
+            if oldMedID != b.MedicineID {
+                updateMedicineStock(tx, b.BookID, oldMedID)
+            }
             return nil
         })
         if err != nil {

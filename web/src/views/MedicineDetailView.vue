@@ -152,7 +152,7 @@
           <div class="sheet-foot"><button type="button" class="btn btn-outline btn-block" @click="showTransfer=false">取消</button><button class="btn btn-primary btn-block" :disabled="saving || !transferTarget" @click="doTransfer">{{ saving ? '转移中…' : '确认转移' }}</button></div>
         </section>
       </div>
-      <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="medicine?.unit || ''" @close="showEditBatch=false" @saved="onBatchSaved" />
+      <StockInEditSheet :open="showEditBatch" :batch="editBatch" :unit="medicine?.unit || ''" :medicines="editMedicines" @close="showEditBatch=false" @saved="onBatchSaved" />
       <div v-if="showStocktake" class="sheet-backdrop" @click.self="showStocktake=false">
         <section class="sheet"><div class="sheet-grab" /><div class="sheet-head"><h2>盘点库存</h2><button class="icon-btn" @click="showStocktake=false"><AppIcon name="close" /></button></div>
           <form class="sheet-body" @submit.prevent="stocktake">
@@ -205,6 +205,8 @@ const showStockOut = ref(false)
 const showStocktake = ref(false)
 const showEditBatch = ref(false)
 const editBatch = ref<any>(null)
+// 修改入库记录时可改归属药品：列出本用药本里未删除的药品。
+const editMedicines = ref<Medicine[]>([])
 const showTransfer = ref(false)
 const transferTarget = ref(0)
 const transferOptions = computed(() => book.books.filter((b) => b.id !== book.currentId && (b.role === 'owner' || b.role === 'manager')).map((b) => ({ value: b.id, label: b.name + '（' + b.care_recipient_name + '）' })))
@@ -321,8 +323,12 @@ function canEditMove(m: any) { return !!book.canMedicineEdit && m.type === 'in' 
 async function openEditBatch(batchId: number) {
   if (!batchId || !book.currentId) return
   try {
-    const res = await medicineApi.getBatch(book.currentId, batchId)
+    const [res, list] = await Promise.all([
+      medicineApi.getBatch(book.currentId, batchId),
+      medicineApi.list(book.currentId, { pageSize: 200 }),
+    ])
     editBatch.value = res.data?.data
+    editMedicines.value = (list.data?.data?.items || []) as Medicine[]
     showEditBatch.value = true
   } catch (e: any) { ui.showToast(e?.response?.data?.message || '读取入库记录失败', 'error') }
 }

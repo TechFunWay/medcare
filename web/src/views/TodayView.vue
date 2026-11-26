@@ -27,7 +27,9 @@
     </div>
 
     <div class="type-bar">
-      <button v-for="t in typeFilters" :key="t.value" class="type-chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">{{ t.label }}</button>
+      <button v-for="t in typeFilters" :key="t.value" class="type-chip" :class="{ active: typeFilter === t.value }" @click="typeFilter = t.value">
+        {{ t.label }}<b class="type-count">{{ typeCounts[t.value] || 0 }}</b>
+      </button>
     </div>
 
     <div class="status-bar">
@@ -42,11 +44,17 @@
       <section v-if="filteredOverdue.length" class="section">
         <div class="section-head"><h2 style="color:var(--mc-danger)">超时 {{ filteredOverdue.length }} 项</h2><span class="tiny muted">完成后可撤销</span></div>
         <div class="list">
-          <article v-for="ev in filteredOverdue" :key="ev.id" class="event-card overdue">
+          <article v-for="(ev, idx) in filteredOverdue" :key="ev.id" class="event-card overdue">
+            <span class="event-index overdue">{{ idx + 1 }}</span>
             <div class="type-dot" :class="ev.type"><AppIcon :name="typeIcon(ev.type)" :size="18" /></div>
             <div class="event-main">
-              <div class="event-title-row"><span class="event-title">{{ ev.medicine_name }}</span><span class="badge missed">{{ overdueLabel(ev) }}</span></div>
-              <div class="event-meta"><span>{{ ev.local_time }}</span><span>{{ ev.dose_amount }} {{ ev.dose_unit }}</span><span v-if="ev.location_name">{{ ev.location_name }}</span><span v-if="ev.executor_name">{{ executorLabel(ev.executor_type) }} {{ ev.executor_name }}</span></div>
+              <div class="event-title-row"><span class="event-title">{{ ev.medicine_name || '药品已删除' }}</span><span v-if="ev.medicine_missing" class="badge missed">药品已删除</span><span class="badge type-badge" :class="ev.type || 'other'">{{ categoryLabel(ev.type) }}</span><span class="badge missed">{{ overdueLabel(ev) }}</span></div>
+              <div class="event-dose-row">
+                <span class="event-dose">{{ ev.dose_amount }} {{ ev.dose_unit }}</span>
+                <span class="event-time">{{ ev.local_time }}</span>
+                <span v-if="ev.location_name" class="event-plan">{{ ev.location_name }}</span>
+                <span v-if="ev.executor_name" class="event-plan">{{ executorLabel(ev.executor_type) }} {{ ev.executor_name }}</span>
+              </div>
               <div class="event-actions">
                 <template v-if="canRecord">
                   <button class="btn btn-primary btn-sm" @click="complete(ev)">完成</button>
@@ -60,11 +68,17 @@
         </div>
       </section>
 
-      <section v-if="dashboard?.next_event && !typeFilter" class="card next-card">
+      <!-- 「下一项」是一张未完成的待办卡片，选了任何状态/分类筛选时都不该出现，
+           否则筛「已完成」还会看到一条未完成的药，看着像筛选失效。 -->
+      <section v-if="dashboard?.next_event && !typeFilter && !statusFilter" class="card next-card">
         <div class="next-main">
           <div class="eyebrow">下一项</div>
-          <div class="next-title">{{ dashboard.next_event.local_time }} · {{ dashboard.next_event.medicine_name }}</div>
-          <div class="muted small">{{ dashboard.next_event.dose_amount }} {{ dashboard.next_event.dose_unit }}<span v-if="dashboard.next_event.location_name"> · {{ dashboard.next_event.location_name }}</span><span v-if="dashboard.next_event.executor_name"> · {{ executorLabel(dashboard.next_event.executor_type) }} {{ dashboard.next_event.executor_name }}</span></div>
+          <div class="next-title">{{ dashboard.next_event.local_time }} · {{ dashboard.next_event.medicine_name }}<span class="badge type-badge" :class="dashboard.next_event.type || 'other'" style="margin-left:6px">{{ categoryLabel(dashboard.next_event.type) }}</span></div>
+          <div class="event-dose-row" style="margin-top:8px">
+            <span class="event-dose">{{ dashboard.next_event.dose_amount }} {{ dashboard.next_event.dose_unit }}</span>
+            <span v-if="dashboard.next_event.location_name" class="event-plan">{{ dashboard.next_event.location_name }}</span>
+            <span v-if="dashboard.next_event.executor_name" class="event-plan">{{ executorLabel(dashboard.next_event.executor_type) }} {{ dashboard.next_event.executor_name }}</span>
+          </div>
         </div>
         <div class="next-actions">
           <button v-if="canRecord" class="btn btn-outline" @click="snooze(dashboard.next_event, 10)">稍后</button>
@@ -76,21 +90,30 @@
       <section v-for="group in visibleGroups" :key="group.key" class="section">
         <div class="section-head"><h2>{{ group.label }}</h2><span class="tiny muted">{{ group.events.length }} 项</span></div>
         <div class="list">
-          <article v-for="ev in group.events" :key="ev.id" class="event-card" :class="{ done: eventStatus(ev) === 'done', overdue: eventStatus(ev) === 'overdue' }">
-            <button class="check" :class="{ done: ev.status === 'done', locked: !canRecord }" :aria-label="ev.status === 'done' ? '撤销完成' : '标记完成'" @click="onCheck(ev)">
+          <article v-for="(ev, idx) in group.events" :key="ev.id" class="event-card" :class="{ done: eventStatus(ev) === 'done', overdue: eventStatus(ev) === 'overdue' }">
+            <span class="event-index" :class="{ done: ev.status === 'done' }">{{ idx + 1 }}</span>
+            <button class="check" :class="{ done: ev.status === 'done', locked: !canRecord, early: eventStatus(ev) === 'upcoming' }" :aria-label="ev.status === 'done' ? '撤销完成' : (eventStatus(ev) === 'upcoming' ? '提前标记完成' : '标记完成')" @click="onCheck(ev)">
               <AppIcon v-if="ev.status === 'done'" name="check" :size="22" />
-              <AppIcon v-else name="clock" :size="20" />
+              <AppIcon v-else name="check" :size="20" />
             </button>
             <div class="event-main" @click="openActions(ev)">
               <div class="event-title-row">
-                <span class="event-title">{{ ev.medicine_name }}</span>
+                <span class="event-title">{{ ev.medicine_name || '药品已删除' }}</span>
+                <span v-if="ev.medicine_missing" class="badge missed">药品已删除</span>
+                <span class="badge type-badge" :class="ev.type || 'other'">{{ categoryLabel(ev.type) }}</span>
                 <span class="badge" :class="statusClass(ev)">{{ statusLabel(ev) }}</span>
               </div>
-              <div class="event-meta"><span>{{ ev.local_time }}</span><span>{{ ev.dose_amount }} {{ ev.dose_unit }}</span><span v-if="ev.plan_title">{{ ev.plan_title }}</span></div>
+              <div class="event-dose-row">
+                <span class="event-dose">{{ ev.dose_amount }} {{ ev.dose_unit }}</span>
+                <span class="event-time">{{ ev.local_time }}</span>
+                <span v-if="ev.plan_title" class="event-plan">{{ ev.plan_title }}</span>
+              </div>
               <div v-if="ev.location_name" class="event-meta location-line"><AppIcon name="location" :size="13" />{{ ev.location_name }}<span v-if="ev.address">· {{ ev.address }}</span></div>
               <div v-if="ev.executor_name" class="event-meta location-line"><AppIcon name="user" :size="13" />{{ executorLabel(ev.executor_type) }} {{ ev.executor_name }}</div>
               <div v-if="ev.type === 'infusion' && infusionText(ev)" class="event-meta location-line"><AppIcon name="clock" :size="13" />{{ infusionText(ev) }}</div>
               <div v-if="ev.type === 'infusion' && actualRange(ev)" class="event-meta location-line"><AppIcon name="clock" :size="13" />{{ actualRange(ev) }}</div>
+              <div v-if="ev.medicine_missing" class="event-meta" style="color:var(--mc-danger)">关联药品已被删除，请到计划里改成现有药品，否则打卡会提示库存不足</div>
+              <div v-if="canRecord && eventStatus(ev) === 'upcoming'" class="event-meta early-line">还没到点也可以提前完成，点左边的圆圈即可</div>
             </div>
             <div class="type-dot" :class="ev.type"><AppIcon :name="typeIcon(ev.type)" :size="18" /></div>
           </article>
@@ -148,6 +171,8 @@
               <button v-if="canRecord && (actionEvent.status === 'pending' || actionEvent.status === 'missed')" class="btn btn-outline btn-block" @click="miss(actionEvent)">标记漏服</button>
               <button v-if="canRecord && actionEvent.status === 'done'" class="btn btn-outline btn-block" @click="undo(actionEvent)">撤销完成</button>
               <button v-if="canRecord" class="btn btn-outline btn-block" @click="openAdjust(actionEvent)">医生调整 / 自己调整</button>
+              <!-- 直接跳到计划编辑页：改用药时间/频率/剂量等，比在下班时间临时调整更彻底 -->
+              <button v-if="book.canPlanEdit && actionEvent.plan_id" class="btn btn-outline btn-block" @click="editPlan(actionEvent)">修改计划（时间 / 频率 / 剂量）</button>
               <button v-if="canRecord && actionEvent.status === 'pending'" class="btn btn-outline btn-block" @click="snooze(actionEvent, 30)">稍后 30 分钟</button>
               <button v-if="canRemind && actionEvent.status !== 'done' && actionEvent.status !== 'skipped'" class="btn btn-outline btn-block" @click="remind(actionEvent)">提醒用药</button>
               <p v-if="!canRecord && !canRemind" class="tiny muted" style="margin:2px 0 0">你在这里只能查看。需要记录或催办，请让管理员在「用药本 → 成员与权限」里勾上「用药记录 · 点完成」或「点提醒」。</p>
@@ -181,6 +206,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import DateField from '../components/DateField.vue'
 import { eventApi, medicineApi, planApi, type Dashboard, type DoseEvent, type Medicine } from '../api/medcare'
@@ -191,6 +217,7 @@ import { reportError } from '../utils/errors'
 
 const book = useBookStore()
 const ui = useUIStore()
+const router = useRouter()
 const dashboard = ref<Dashboard | null>(null)
 const loading = ref(true)
 const alerts = ref<Medicine[]>([])
@@ -281,6 +308,17 @@ const typeFilters = [
 ]
 function matchesType(ev: DoseEvent) { return !typeFilter.value || (ev.type || 'other') === typeFilter.value }
 const typedEvents = computed(() => allEvents.value.filter(matchesType))
+// 分类数量：按当前状态筛选统计各类有多少项，与下面的状态数量互相联动。
+const typeCounts = computed<Record<string, number>>(() => {
+  const c: Record<string, number> = { '': 0, oral: 0, injection: 0, infusion: 0, topical: 0, other: 0 }
+  for (const ev of allEvents.value) {
+    if (statusFilter.value && eventStatus(ev) !== statusFilter.value) continue
+    c[''] = (c[''] || 0) + 1
+    const t = ev.type || 'other'
+    c[t] = (c[t] || 0) + 1
+  }
+  return c
+})
 const statusCounts = computed<Record<string, number>>(() => {
   const c: Record<string, number> = { all: typedEvents.value.length, upcoming: 0, due: 0, overdue: 0, done: 0, skipped: 0, missed: 0 }
   for (const ev of typedEvents.value) { const s = eventStatus(ev); c[s] = (c[s] || 0) + 1 }
@@ -309,6 +347,16 @@ const dateStrip = computed(() => {
   return out
 })
 
+// 药品分类中文名：与筛选条、药品页保持一致。
+function categoryLabel(type?: string) {
+  switch (type) {
+    case 'oral': return '口服'
+    case 'injection': return '注射'
+    case 'infusion': return '输液'
+    case 'topical': return '外用'
+    default: return '其他'
+  }
+}
 function typeIcon(type: string) { return type === 'injection' ? 'pill' : type === 'infusion' ? 'location' : 'pill' }
 function executorLabel(type?: string) { return type === 'self' ? '自己' : type === 'family' ? '家人' : type === 'nurse' ? '护士' : type === 'doctor' ? '医生' : type === 'other' ? '他人' : '执行人' }
 function hm(iso?: string) { if (!iso) return ''; try { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }).format(new Date(iso)) } catch { return '' } }
@@ -380,6 +428,12 @@ function onCheck(ev: DoseEvent) {
 }
 async function complete(ev: DoseEvent) {
   if (!book.currentId) return
+  // 药品已被删除：完成会因库存 0 报错，先引导去计划页改药品。
+  if (ev.medicine_missing) {
+    ui.showToast('这条记录的药品已被删除，请到计划页把药品改成现有的药品后再打卡', 'error')
+    actionEvent.value = null
+    return
+  }
   actionEvent.value = null
   try {
     const res = await eventApi.complete(book.currentId, ev.id, { version: ev.version, deduct_stock: true })
@@ -429,6 +483,12 @@ async function snooze(ev: DoseEvent, minutes: number) {
   try { await eventApi.snooze(book.currentId, ev.id, minutes); ui.showToast(`已稍后 ${minutes} 分钟`); await load() } catch (e: any) { ui.showToast(e?.response?.data?.message || '稍后提醒失败', 'error') }
 }
 function openActions(ev: DoseEvent) { actionEvent.value = ev }
+// 跳到计划编辑页；改完计划后事件会按新时间重铺（未完成的更新、已完成的保留）。
+function editPlan(ev: DoseEvent) {
+  if (!ev.plan_id) return
+  actionEvent.value = null
+  router.push('/plans/' + ev.plan_id)
+}
 async function openAdjust(ev: DoseEvent) {
   actionEvent.value = null
   adjustEvent.value = ev
@@ -530,6 +590,30 @@ watch(() => book.currentId, load)
 .type-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
 .type-chip { flex: 0 0 auto; min-height: 30px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--mc-border); background: transparent; color: var(--mc-text-muted); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .type-chip.active { border-color: var(--mc-primary); background: var(--mc-primary-soft); color: var(--mc-primary-strong); }
+/* 分类徽标：按分类配色，与左侧类型圆点呼应 */
+.badge.type-badge { font-weight: 650; }
+.badge.type-badge.oral { background: var(--mc-primary-soft); color: var(--mc-primary-strong); }
+.badge.type-badge.injection { background: var(--mc-info-soft); color: var(--mc-info); }
+.badge.type-badge.infusion { background: var(--mc-warning-soft, #f6e7c8); color: #8a6413; }
+.badge.type-badge.topical { background: var(--mc-surface-2); color: var(--mc-text-muted); }
+.badge.type-badge.other { background: var(--mc-surface-2); color: var(--mc-text-muted); }
+/* 未到时的圆形按钮：颜色淡一些但仍明显可点，点了就是提前完成 */
+/* 剂量是打卡时最需要看清的信息，单独做成醒目的胶囊；时间与计划标题退后 */
+.event-dose-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.event-dose { display: inline-flex; align-items: baseline; gap: 2px; padding: 1px 7px; border-radius: 6px; background: var(--mc-primary-soft); color: var(--mc-primary-strong); font-size: 13px; font-weight: 800; line-height: 1.5; letter-spacing: .01em; }
+.event-card.overdue .event-dose { background: var(--mc-danger-soft, #fbe3e0); color: var(--mc-danger); }
+.event-card.done .event-dose { background: var(--mc-surface-2); color: var(--mc-text-muted); }
+.event-time { font-size: 13px; font-weight: 700; color: var(--mc-text); }
+.event-plan { font-size: 11.5px; color: var(--mc-text-muted); }
+/* 分组内序号：让一屏里十几条用药有明确次序，便于对照纸质记录 */
+.event-index { flex: 0 0 auto; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 6px; background: var(--mc-surface-2); color: var(--mc-text-muted); font-size: 11.5px; font-weight: 700; line-height: 20px; text-align: center; }
+.event-index.done { background: var(--mc-primary-soft); color: var(--mc-primary-strong); }
+.event-index.overdue { background: var(--mc-danger-soft, #fbe3e0); color: var(--mc-danger); }
+.check.early { border-color: var(--mc-border); color: var(--mc-text-muted); }
+.check.early:hover { border-color: var(--mc-primary); color: var(--mc-primary); }
+.early-line { color: var(--mc-primary-strong); font-weight: 600; }
+.type-count { display: inline-block; min-width: 15px; margin-left: 4px; padding: 0 4px; border-radius: 999px; background: var(--mc-surface-2); color: var(--mc-text); font-size: 10.5px; font-weight: 700; line-height: 15px; text-align: center; }
+.type-chip.active .type-count { background: var(--mc-primary); color: #fff; }
 .status-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .status-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--mc-border); background: var(--mc-surface); color: var(--mc-text-muted); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .status-chip b { font-size: 11px; min-width: 16px; padding: 0 4px; border-radius: 999px; background: var(--mc-surface-2); color: var(--mc-text); text-align: center; }
